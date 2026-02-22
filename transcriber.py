@@ -106,7 +106,7 @@ def run_transcription(job, wav_path, filename, model_name: str = MODEL_PRECISE):
 
         job["progress"] = "Transcribing audio..."
         audio = whisperx.load_audio(wav_path)
-        result = model.transcribe(audio, batch_size=16)
+        result = model.transcribe(audio, batch_size=4)
         language = result["language"]
         job["language"] = language
 

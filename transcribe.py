@@ -26,7 +26,7 @@ def main():
 
     print("Transcribing...")
     audio = whisperx.load_audio(audio_path)
-    result = model.transcribe(audio, batch_size=16)
+    result = model.transcribe(audio, batch_size=4)
     language = result["language"]
     print(f"Detected language: {language}")
 
