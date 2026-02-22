@@ -6,7 +6,7 @@ from pathlib import Path
 from flask import Flask, request, jsonify, render_template, send_file
 import io
 
-from transcriber import convert_to_wav, run_transcription
+from transcriber import convert_to_wav, run_transcription, MODEL_FAST, MODEL_PRECISE
 
 UPLOAD_DIR = Path("/tmp/audio-transcription")
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
@@ -24,9 +24,17 @@ def _allowed(filename: str) -> bool:
     return Path(filename).suffix.lower() in ALLOWED_EXTENSIONS
 
 
+BASE_PATH = os.environ.get("APP_BASE_PATH", "/")
+
+
 @app.route("/")
 def index():
-    return render_template("index.html")
+    return render_template("index.html", base_path=BASE_PATH)
+
+
+@app.errorhandler(413)
+def too_large(_e):
+    return jsonify({"error": "File too large — check server upload limits"}), 413
 
 
 @app.route("/upload", methods=["POST"])
@@ -39,6 +47,9 @@ def upload():
         return jsonify({"error": "No file selected"}), 400
     if not _allowed(f.filename):
         return jsonify({"error": "Unsupported file type"}), 400
+
+    model_choice = request.form.get("model", "precise")
+    model_name = MODEL_FAST if model_choice == "fast" else MODEL_PRECISE
 
     job_id = str(uuid.uuid4())
     suffix = Path(f.filename).suffix.lower()
@@ -63,6 +74,8 @@ def upload():
         "status": "running",
         "progress": "Queued",
         "filename": f.filename,
+        "language": None,
+        "cancelled": False,
         "txt": None,
         "docx": None,
         "error": None,
@@ -72,7 +85,7 @@ def upload():
 
     t = threading.Thread(
         target=run_transcription,
-        args=(job, wav_path, f.filename),
+        args=(job, wav_path, f.filename, model_name),
         daemon=True,
     )
     t.start()
@@ -86,10 +99,26 @@ def status(job_id):
         job = JOBS.get(job_id)
     if job is None:
         return jsonify({"error": "Job not found"}), 404
-    resp = {"status": job["status"], "progress": job["progress"]}
+    resp = {
+        "status": job["status"],
+        "progress": job["progress"],
+        "language": job.get("language"),
+    }
     if job["status"] == "error":
         resp["error"] = job["error"]
     return jsonify(resp)
+
+
+@app.route("/cancel/<job_id>", methods=["POST"])
+def cancel(job_id):
+    with JOBS_LOCK:
+        job = JOBS.get(job_id)
+    if job is None:
+        return jsonify({"error": "Job not found"}), 404
+    if job["status"] == "running":
+        job["cancelled"] = True
+        job["progress"] = "Cancelling..."
+    return jsonify({"ok": True})
 
 
 @app.route("/download/<job_id>/txt")
@@ -123,4 +152,4 @@ def download_docx(job_id):
 
 
 if __name__ == "__main__":
-    app.run(host="127.0.0.1", port=5000, debug=False)
+    app.run(host="0.0.0.0", port=5000, debug=False)

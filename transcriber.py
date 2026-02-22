@@ -9,20 +9,24 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# Global model cache — loaded once on first request
-_model = None
+# Global model cache — one entry per model name, loaded on first use
+_models: dict = {}
 _model_lock = threading.Lock()
 
 _device = "cuda" if torch.cuda.is_available() else "cpu"
 _compute_type = "float16" if _device == "cuda" else "int8"
 
+MODEL_FAST    = "base"
+MODEL_PRECISE = "large-v3"
 
-def _get_model():
-    global _model
+
+def _get_model(model_name: str):
     with _model_lock:
-        if _model is None:
-            _model = whisperx.load_model("large-v3", _device, compute_type=_compute_type)
-    return _model
+        if model_name not in _models:
+            _models[model_name] = whisperx.load_model(
+                model_name, _device, compute_type=_compute_type
+            )
+    return _models[model_name]
 
 
 def convert_to_wav(input_path, output_path):
@@ -81,7 +85,7 @@ def segments_to_docx(segments, filename):
     return buf.read()
 
 
-def run_transcription(job, wav_path, filename):
+def run_transcription(job, wav_path, filename, model_name: str = MODEL_PRECISE):
     """Run full WhisperX pipeline and update job dict in-place."""
     hf_token = os.environ.get("HF_TOKEN")
     if not hf_token:
@@ -89,16 +93,28 @@ def run_transcription(job, wav_path, filename):
         job["error"] = "HF_TOKEN not set"
         return
 
+    def cancelled():
+        return job.get("cancelled", False)
+
     try:
         job["progress"] = "Loading model..."
-        model = _get_model()
+        model = _get_model(model_name)
+
+        if cancelled():
+            job["status"] = "cancelled"
+            return
 
         job["progress"] = "Transcribing audio..."
         audio = whisperx.load_audio(wav_path)
         result = model.transcribe(audio, batch_size=16)
         language = result["language"]
+        job["language"] = language
 
-        job["progress"] = f"Aligning timestamps (language: {language})..."
+        if cancelled():
+            job["status"] = "cancelled"
+            return
+
+        job["progress"] = f"Aligning timestamps..."
         align_model, metadata = whisperx.load_align_model(
             language_code=language, device=_device
         )
@@ -107,12 +123,20 @@ def run_transcription(job, wav_path, filename):
             return_char_alignments=False,
         )
 
+        if cancelled():
+            job["status"] = "cancelled"
+            return
+
         job["progress"] = "Diarizing speakers..."
         diarize_model = whisperx.diarize.DiarizationPipeline(
             token=hf_token, device=_device
         )
         diarize_segments = diarize_model(audio)
         result = whisperx.assign_word_speakers(diarize_segments, result)
+
+        if cancelled():
+            job["status"] = "cancelled"
+            return
 
         job["progress"] = "Generating output files..."
         segments = result["segments"]

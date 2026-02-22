@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <base href="/audio/">
+  <base href="{{ base_path }}">
   <title>Audio Transcription</title>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -46,9 +46,44 @@
       min-height: 1.25rem;
     }
     #file-input { display: none; }
-    #transcribe-btn {
+    .model-toggle {
+      display: flex;
       margin-top: 1.25rem;
-      width: 100%;
+      border: 1px solid #d1d5db;
+      border-radius: 8px;
+      overflow: hidden;
+    }
+    .model-toggle input[type="radio"] { display: none; }
+    .model-toggle label {
+      flex: 1;
+      padding: 0.55rem 0;
+      text-align: center;
+      font-size: 0.9rem;
+      cursor: pointer;
+      color: #374151;
+      background: #f9fafb;
+      transition: background 0.15s, color 0.15s;
+      user-select: none;
+    }
+    .model-toggle label:first-of-type { border-right: 1px solid #d1d5db; }
+    .model-toggle input[type="radio"]:checked + label {
+      background: #2563eb;
+      color: #fff;
+      font-weight: 600;
+    }
+    .model-toggle label small {
+      display: block;
+      font-size: 0.72rem;
+      opacity: 0.75;
+      font-weight: normal;
+    }
+    .btn-row {
+      margin-top: 1.25rem;
+      display: flex;
+      gap: 0.6rem;
+    }
+    #transcribe-btn {
+      flex: 1;
       padding: 0.75rem;
       background: #2563eb;
       color: #fff;
@@ -63,6 +98,30 @@
       cursor: not-allowed;
     }
     #transcribe-btn:not(:disabled):hover { background: #1d4ed8; }
+    #stop-btn {
+      padding: 0.75rem 1.1rem;
+      background: #fff;
+      color: #dc2626;
+      border: 1px solid #fca5a5;
+      border-radius: 8px;
+      font-size: 1rem;
+      cursor: pointer;
+      display: none;
+      transition: background 0.2s;
+    }
+    #stop-btn:hover { background: #fef2f2; }
+    #lang-badge {
+      display: inline-block;
+      margin-left: 0.5rem;
+      padding: 0.1rem 0.5rem;
+      background: #eff6ff;
+      color: #1d4ed8;
+      border-radius: 4px;
+      font-size: 0.78rem;
+      font-weight: 600;
+      letter-spacing: 0.04em;
+      vertical-align: middle;
+    }
     #status-box {
       margin-top: 1.5rem;
       display: none;
@@ -116,7 +175,17 @@
   <input id="file-input" type="file" accept=".mp3,.m4a,.mp4,.wav,.ogg,.flac,.webm,.aac">
   <div id="file-info"></div>
 
-  <button id="transcribe-btn" disabled>Transcribe</button>
+  <div class="model-toggle">
+    <input type="radio" name="model" id="model-precise" value="precise" checked>
+    <label for="model-precise">Precise <small>large-v3, slower</small></label>
+    <input type="radio" name="model" id="model-fast" value="fast">
+    <label for="model-fast">Fast <small>base, quicker</small></label>
+  </div>
+
+  <div class="btn-row">
+    <button id="transcribe-btn" disabled>Transcribe</button>
+    <button id="stop-btn" title="Stop transcription">&#9632; Stop</button>
+  </div>
 
   <div id="status-box">
     <div class="label">Status</div>
@@ -140,6 +209,7 @@
   const fileInput  = document.getElementById('file-input');
   const fileInfo   = document.getElementById('file-info');
   const btn        = document.getElementById('transcribe-btn');
+  const stopBtn    = document.getElementById('stop-btn');
   const statusBox  = document.getElementById('status-box');
   const statusText = document.getElementById('status-text');
   const downloads  = document.getElementById('downloads');
@@ -149,6 +219,7 @@
 
   let selectedFile = null;
   let pollInterval = null;
+  let currentJobId = null;
 
   function formatBytes(n) {
     if (n < 1024) return n + ' B';
@@ -177,14 +248,18 @@
     if (e.dataTransfer.files[0]) setFile(e.dataTransfer.files[0]);
   });
 
-  function showSpinner(msg) {
-    statusBox.style.display = 'block';
-    statusText.innerHTML = `<span class="spinner"></span><span>${msg}</span>`;
+  function langBadge(lang) {
+    return lang ? `<span id="lang-badge">${lang.toUpperCase()}</span>` : '';
   }
 
-  function showDone(jobId) {
+  function showSpinner(msg, lang) {
     statusBox.style.display = 'block';
-    statusText.innerHTML = '<span style="color:#16a34a;font-weight:600;">Done!</span>';
+    statusText.innerHTML = `<span class="spinner"></span><span>${msg}${langBadge(lang)}</span>`;
+  }
+
+  function showDone(jobId, lang) {
+    statusBox.style.display = 'block';
+    statusText.innerHTML = `<span style="color:#16a34a;font-weight:600;">Done!</span>${langBadge(lang)}`;
     dlTxt.href  = `download/${jobId}/txt`;
     dlDocx.href = `download/${jobId}/docx`;
     downloads.style.display = 'flex';
@@ -196,48 +271,82 @@
     errorMsg.style.display = 'block';
   }
 
+  function stopRunning() {
+    stopBtn.style.display = 'none';
+    btn.disabled = false;
+    clearInterval(pollInterval);
+    pollInterval = null;
+  }
+
   function startPolling(jobId) {
     pollInterval = setInterval(async () => {
       try {
         const r = await fetch(`status/${jobId}`);
         const data = await r.json();
         if (data.status === 'running') {
-          showSpinner(data.progress || 'Processing...');
+          showSpinner(data.progress || 'Processing...', data.language);
         } else if (data.status === 'done') {
-          clearInterval(pollInterval);
-          showDone(jobId);
-          btn.disabled = false;
+          stopRunning();
+          showDone(jobId, data.language);
+        } else if (data.status === 'cancelled') {
+          stopRunning();
+          statusBox.style.display = 'block';
+          statusText.innerHTML = '<span style="color:#6b7280;">Cancelled.</span>';
         } else if (data.status === 'error') {
-          clearInterval(pollInterval);
+          stopRunning();
           showError(data.error || 'Unknown error');
-          btn.disabled = false;
         }
       } catch (err) {
-        clearInterval(pollInterval);
+        stopRunning();
         showError('Network error while polling status');
-        btn.disabled = false;
       }
     }, 3000);
   }
 
+  stopBtn.addEventListener('click', async () => {
+    if (!currentJobId) return;
+    stopBtn.disabled = true;
+    stopBtn.textContent = 'Stopping…';
+    try {
+      await fetch(`cancel/${currentJobId}`, { method: 'POST' });
+    } catch (_) { /* ignore */ }
+  });
+
   btn.addEventListener('click', async () => {
     if (!selectedFile) return;
     btn.disabled = true;
+    stopBtn.style.display = 'none';
+    stopBtn.disabled = false;
+    stopBtn.textContent = '⏹ Stop';
     downloads.style.display = 'none';
     errorMsg.style.display  = 'none';
+    currentJobId = null;
     showSpinner('Uploading...');
 
+    const model = document.querySelector('input[name="model"]:checked').value;
     const form = new FormData();
     form.append('audio', selectedFile);
+    form.append('model', model);
 
     try {
       const r = await fetch('upload', { method: 'POST', body: form });
-      const data = await r.json();
+      let data;
+      try {
+        data = await r.json();
+      } catch {
+        const hint = r.status === 413 ? 'File too large for the server'
+                   : `Unexpected server response (HTTP ${r.status})`;
+        showError(hint);
+        btn.disabled = false;
+        return;
+      }
       if (!r.ok || data.error) {
         showError(data.error || 'Upload failed');
         btn.disabled = false;
         return;
       }
+      currentJobId = data.job_id;
+      stopBtn.style.display = 'inline-block';
       showSpinner('Queued — waiting for transcription...');
       startPolling(data.job_id);
     } catch (err) {
