@@ -1,3 +1,4 @@
+import gc
 import os
 import io
 import subprocess
@@ -27,6 +28,14 @@ def _get_model(model_name: str):
                 model_name, _device, compute_type=_compute_type
             )
     return _models[model_name]
+
+
+def _unload_models():
+    with _model_lock:
+        _models.clear()
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
 
 
 def convert_to_wav(input_path, output_path):
@@ -149,6 +158,8 @@ def run_transcription(job, wav_path, filename, model_name: str = MODEL_PRECISE):
         job["status"] = "error"
         job["error"] = str(exc)
     finally:
+        # Unload all models and free VRAM
+        _unload_models()
         # Clean up temp WAV
         try:
             os.remove(wav_path)
