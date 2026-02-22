@@ -1,0 +1,20 @@
+[Unit]
+Description=Audio Transcription Flask App
+After=network.target
+
+[Service]
+Type=simple
+User=vilhuber
+Group=vilhuber
+WorkingDirectory=/home/transcription
+EnvironmentFile=/home/transcription/.env
+ExecStart=/home/transcription/.venv/bin/python app.py
+Restart=on-failure
+RestartSec=10
+TimeoutStopSec=120
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=audio-transcription
+
+[Install]
+WantedBy=multi-user.target

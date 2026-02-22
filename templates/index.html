@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <base href="/audio/">
+  <title>Audio Transcription</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: system-ui, -apple-system, sans-serif;
+      background: #f5f5f5;
+      display: flex;
+      justify-content: center;
+      align-items: flex-start;
+      min-height: 100vh;
+      padding: 2rem 1rem;
+    }
+    .card {
+      background: #fff;
+      border-radius: 12px;
+      box-shadow: 0 2px 16px rgba(0,0,0,0.1);
+      padding: 2rem;
+      width: 100%;
+      max-width: 540px;
+    }
+    h1 { font-size: 1.5rem; margin-bottom: 1.5rem; color: #222; }
+    #drop-zone {
+      border: 2px dashed #aaa;
+      border-radius: 8px;
+      padding: 2.5rem 1rem;
+      text-align: center;
+      cursor: pointer;
+      transition: border-color 0.2s, background 0.2s;
+      color: #666;
+    }
+    #drop-zone.drag-over {
+      border-color: #2563eb;
+      background: #eff6ff;
+    }
+    #drop-zone svg { display: block; margin: 0 auto 0.75rem; }
+    #file-info {
+      margin-top: 0.75rem;
+      font-size: 0.875rem;
+      color: #555;
+      min-height: 1.25rem;
+    }
+    #file-input { display: none; }
+    #transcribe-btn {
+      margin-top: 1.25rem;
+      width: 100%;
+      padding: 0.75rem;
+      background: #2563eb;
+      color: #fff;
+      border: none;
+      border-radius: 8px;
+      font-size: 1rem;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+    #transcribe-btn:disabled {
+      background: #93c5fd;
+      cursor: not-allowed;
+    }
+    #transcribe-btn:not(:disabled):hover { background: #1d4ed8; }
+    #status-box {
+      margin-top: 1.5rem;
+      display: none;
+      background: #f9fafb;
+      border: 1px solid #e5e7eb;
+      border-radius: 8px;
+      padding: 1rem 1.25rem;
+    }
+    #status-box .label { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; color: #6b7280; margin-bottom: 0.4rem; }
+    #status-text { font-size: 0.95rem; color: #111; display: flex; align-items: center; gap: 0.5rem; }
+    .spinner {
+      width: 16px; height: 16px;
+      border: 2px solid #d1d5db;
+      border-top-color: #2563eb;
+      border-radius: 50%;
+      animation: spin 0.7s linear infinite;
+      flex-shrink: 0;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    #downloads { margin-top: 1rem; display: none; gap: 0.75rem; }
+    #downloads a {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.4rem;
+      padding: 0.5rem 1rem;
+      border-radius: 6px;
+      font-size: 0.9rem;
+      text-decoration: none;
+      font-weight: 500;
+    }
+    .btn-txt  { background: #ecfdf5; color: #065f46; border: 1px solid #6ee7b7; }
+    .btn-docx { background: #eff6ff; color: #1e3a8a; border: 1px solid #93c5fd; }
+    .btn-txt:hover  { background: #d1fae5; }
+    .btn-docx:hover { background: #dbeafe; }
+    #error-msg { margin-top: 0.75rem; color: #dc2626; font-size: 0.9rem; display: none; }
+  </style>
+</head>
+<body>
+<div class="card">
+  <h1>Audio Transcription</h1>
+
+  <div id="drop-zone" role="button" tabindex="0" aria-label="Drop audio file here or click to select">
+    <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#9ca3af" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+      <polyline points="17 8 12 3 7 8"/>
+      <line x1="12" y1="3" x2="12" y2="15"/>
+    </svg>
+    <p>Drag &amp; drop an audio file here</p>
+    <p style="font-size:0.8rem;margin-top:0.4rem;">or click to select &mdash; mp3, m4a, mp4, wav, flac, ogg&hellip;</p>
+  </div>
+  <input id="file-input" type="file" accept=".mp3,.m4a,.mp4,.wav,.ogg,.flac,.webm,.aac">
+  <div id="file-info"></div>
+
+  <button id="transcribe-btn" disabled>Transcribe</button>
+
+  <div id="status-box">
+    <div class="label">Status</div>
+    <div id="status-text"></div>
+  </div>
+  <div id="error-msg"></div>
+  <div id="downloads">
+    <a id="dl-txt"  class="btn-txt"  href="#" download>
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+      Download TXT
+    </a>
+    <a id="dl-docx" class="btn-docx" href="#" download>
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+      Download DOCX
+    </a>
+  </div>
+</div>
+
+<script>
+  const dropZone   = document.getElementById('drop-zone');
+  const fileInput  = document.getElementById('file-input');
+  const fileInfo   = document.getElementById('file-info');
+  const btn        = document.getElementById('transcribe-btn');
+  const statusBox  = document.getElementById('status-box');
+  const statusText = document.getElementById('status-text');
+  const downloads  = document.getElementById('downloads');
+  const errorMsg   = document.getElementById('error-msg');
+  const dlTxt      = document.getElementById('dl-txt');
+  const dlDocx     = document.getElementById('dl-docx');
+
+  let selectedFile = null;
+  let pollInterval = null;
+
+  function formatBytes(n) {
+    if (n < 1024) return n + ' B';
+    if (n < 1048576) return (n/1024).toFixed(1) + ' KB';
+    return (n/1048576).toFixed(1) + ' MB';
+  }
+
+  function setFile(file) {
+    selectedFile = file;
+    fileInfo.textContent = `${file.name} (${formatBytes(file.size)})`;
+    btn.disabled = false;
+    downloads.style.display = 'none';
+    statusBox.style.display  = 'none';
+    errorMsg.style.display   = 'none';
+  }
+
+  dropZone.addEventListener('click', () => fileInput.click());
+  dropZone.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') fileInput.click(); });
+  fileInput.addEventListener('change', () => { if (fileInput.files[0]) setFile(fileInput.files[0]); });
+
+  dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('drag-over'); });
+  dropZone.addEventListener('dragleave', () => dropZone.classList.remove('drag-over'));
+  dropZone.addEventListener('drop', e => {
+    e.preventDefault();
+    dropZone.classList.remove('drag-over');
+    if (e.dataTransfer.files[0]) setFile(e.dataTransfer.files[0]);
+  });
+
+  function showSpinner(msg) {
+    statusBox.style.display = 'block';
+    statusText.innerHTML = `<span class="spinner"></span><span>${msg}</span>`;
+  }
+
+  function showDone(jobId) {
+    statusBox.style.display = 'block';
+    statusText.innerHTML = '<span style="color:#16a34a;font-weight:600;">Done!</span>';
+    dlTxt.href  = `download/${jobId}/txt`;
+    dlDocx.href = `download/${jobId}/docx`;
+    downloads.style.display = 'flex';
+  }
+
+  function showError(msg) {
+    statusBox.style.display = 'none';
+    errorMsg.textContent = `Error: ${msg}`;
+    errorMsg.style.display = 'block';
+  }
+
+  function startPolling(jobId) {
+    pollInterval = setInterval(async () => {
+      try {
+        const r = await fetch(`status/${jobId}`);
+        const data = await r.json();
+        if (data.status === 'running') {
+          showSpinner(data.progress || 'Processing...');
+        } else if (data.status === 'done') {
+          clearInterval(pollInterval);
+          showDone(jobId);
+          btn.disabled = false;
+        } else if (data.status === 'error') {
+          clearInterval(pollInterval);
+          showError(data.error || 'Unknown error');
+          btn.disabled = false;
+        }
+      } catch (err) {
+        clearInterval(pollInterval);
+        showError('Network error while polling status');
+        btn.disabled = false;
+      }
+    }, 3000);
+  }
+
+  btn.addEventListener('click', async () => {
+    if (!selectedFile) return;
+    btn.disabled = true;
+    downloads.style.display = 'none';
+    errorMsg.style.display  = 'none';
+    showSpinner('Uploading...');
+
+    const form = new FormData();
+    form.append('audio', selectedFile);
+
+    try {
+      const r = await fetch('upload', { method: 'POST', body: form });
+      const data = await r.json();
+      if (!r.ok || data.error) {
+        showError(data.error || 'Upload failed');
+        btn.disabled = false;
+        return;
+      }
+      showSpinner('Queued — waiting for transcription...');
+      startPolling(data.job_id);
+    } catch (err) {
+      showError('Upload failed: ' + err.message);
+      btn.disabled = false;
+    }
+  });
+</script>
+</body>
+</html>
