@@ -157,6 +157,39 @@
     .btn-txt:hover  { background: #d1fae5; }
     .btn-docx:hover { background: #dbeafe; }
     #error-msg { margin-top: 0.75rem; color: #dc2626; font-size: 0.9rem; display: none; }
+    #stats-box {
+      margin-top: 0.75rem;
+      display: none;
+      background: #f0fdf4;
+      border: 1px solid #bbf7d0;
+      border-radius: 8px;
+      padding: 0.75rem 1rem;
+    }
+    #stats-box .stats-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr;
+      gap: 0.5rem 0.75rem;
+    }
+    #stats-box .stat {
+      display: flex;
+      flex-direction: column;
+    }
+    #stats-box .stat-label {
+      font-size: 0.7rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: #6b7280;
+    }
+    #stats-box .stat-value {
+      font-size: 0.92rem;
+      font-weight: 600;
+      color: #065f46;
+    }
+    #stats-box .stat-sub {
+      font-size: 0.75rem;
+      color: #4b5563;
+      font-weight: normal;
+    }
   </style>
 </head>
 <body>
@@ -192,6 +225,23 @@
     <div id="status-text"></div>
   </div>
   <div id="error-msg"></div>
+  <div id="stats-box">
+    <div class="stats-grid">
+      <div class="stat">
+        <span class="stat-label">Audio</span>
+        <span class="stat-value" id="stat-audio">—</span>
+      </div>
+      <div class="stat">
+        <span class="stat-label">Transcription</span>
+        <span class="stat-value" id="stat-transcription">—</span>
+        <span class="stat-sub" id="stat-speedup"></span>
+      </div>
+      <div class="stat">
+        <span class="stat-label">Diarization</span>
+        <span class="stat-value" id="stat-diarization">—</span>
+      </div>
+    </div>
+  </div>
   <div id="downloads">
     <a id="dl-txt"  class="btn-txt"  href="#" download>
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
@@ -216,6 +266,7 @@
   const errorMsg   = document.getElementById('error-msg');
   const dlTxt      = document.getElementById('dl-txt');
   const dlDocx     = document.getElementById('dl-docx');
+  const statsBox   = document.getElementById('stats-box');
 
   let selectedFile = null;
   let pollInterval = null;
@@ -227,12 +278,17 @@
     return (n/1048576).toFixed(1) + ' MB';
   }
 
+  function fmtMin(seconds) {
+    return (seconds / 60).toFixed(1) + ' min';
+  }
+
   function setFile(file) {
     selectedFile = file;
     fileInfo.textContent = `${file.name} (${formatBytes(file.size)})`;
     btn.disabled = false;
     downloads.style.display = 'none';
     statusBox.style.display  = 'none';
+    statsBox.style.display   = 'none';
     errorMsg.style.display   = 'none';
   }
 
@@ -257,12 +313,20 @@
     statusText.innerHTML = `<span class="spinner"></span><span>${msg}${langBadge(lang)}</span>`;
   }
 
-  function showDone(jobId, lang) {
+  function showDone(jobId, lang, stats) {
     statusBox.style.display = 'block';
     statusText.innerHTML = `<span style="color:#16a34a;font-weight:600;">Done!</span>${langBadge(lang)}`;
     dlTxt.href  = `download/${jobId}/txt`;
     dlDocx.href = `download/${jobId}/docx`;
     downloads.style.display = 'flex';
+    if (stats) {
+      document.getElementById('stat-audio').textContent = fmtMin(stats.audio_duration_s);
+      document.getElementById('stat-transcription').textContent = fmtMin(stats.transcription_s);
+      const speedup = stats.audio_duration_s / stats.transcription_s;
+      document.getElementById('stat-speedup').textContent = speedup.toFixed(1) + 'x realtime';
+      document.getElementById('stat-diarization').textContent = fmtMin(stats.diarization_s);
+      statsBox.style.display = 'block';
+    }
   }
 
   function showError(msg) {
@@ -287,7 +351,7 @@
           showSpinner(data.progress || 'Processing...', data.language);
         } else if (data.status === 'done') {
           stopRunning();
-          showDone(jobId, data.language);
+          showDone(jobId, data.language, data.stats);
         } else if (data.status === 'cancelled') {
           stopRunning();
           statusBox.style.display = 'block';
@@ -319,6 +383,7 @@
     stopBtn.disabled = false;
     stopBtn.textContent = '⏹ Stop';
     downloads.style.display = 'none';
+    statsBox.style.display  = 'none';
     errorMsg.style.display  = 'none';
     currentJobId = null;
     showSpinner('Uploading...');

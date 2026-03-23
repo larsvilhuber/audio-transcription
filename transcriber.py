@@ -3,6 +3,7 @@ import os
 import io
 import subprocess
 import threading
+import time
 import torch
 import whisperx
 from docx import Document
@@ -115,7 +116,12 @@ def run_transcription(job, wav_path, filename, model_name: str = MODEL_PRECISE):
 
         job["progress"] = "Transcribing audio..."
         audio = whisperx.load_audio(wav_path)
+        audio_duration_s = len(audio) / 16000.0
+
+        t0 = time.time()
         result = model.transcribe(audio, batch_size=4)
+        transcription_s = time.time() - t0
+
         language = result["language"]
         job["language"] = language
 
@@ -140,7 +146,9 @@ def run_transcription(job, wav_path, filename, model_name: str = MODEL_PRECISE):
         diarize_model = whisperx.diarize.DiarizationPipeline(
             token=hf_token, device=_device
         )
+        t0 = time.time()
         diarize_segments = diarize_model(audio)
+        diarization_s = time.time() - t0
         result = whisperx.assign_word_speakers(diarize_segments, result)
 
         if cancelled():
@@ -151,6 +159,11 @@ def run_transcription(job, wav_path, filename, model_name: str = MODEL_PRECISE):
         segments = result["segments"]
         job["txt"] = segments_to_text(segments)
         job["docx"] = segments_to_docx(segments, filename)
+        job["stats"] = {
+            "audio_duration_s": audio_duration_s,
+            "transcription_s": transcription_s,
+            "diarization_s": diarization_s,
+        }
         job["status"] = "done"
         job["progress"] = "Complete"
 

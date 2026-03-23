@@ -104,6 +104,8 @@ def status(job_id):
         "progress": job["progress"],
         "language": job.get("language"),
     }
+    if job["status"] == "done":
+        resp["stats"] = job.get("stats")
     if job["status"] == "error":
         resp["error"] = job["error"]
     return jsonify(resp)
