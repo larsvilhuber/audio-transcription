@@ -65,7 +65,7 @@
       transition: background 0.15s, color 0.15s;
       user-select: none;
     }
-    .model-toggle label:first-of-type { border-right: 1px solid #d1d5db; }
+    .model-toggle label:not(:last-of-type) { border-right: 1px solid #d1d5db; }
     .model-toggle input[type="radio"]:checked + label {
       background: #2563eb;
       color: #fff;
@@ -213,6 +213,8 @@
     <label for="model-precise">Precise <small>large-v3, slower</small></label>
     <input type="radio" name="model" id="model-fast" value="fast">
     <label for="model-fast">Fast <small>base, quicker</small></label>
+    <input type="radio" name="model" id="model-mistral" value="mistral">
+    <label for="model-mistral">Mistral Voxtral <small>voxtral-mini, cloud API</small></label>
   </div>
 
   <div class="btn-row">
@@ -324,7 +326,8 @@
       document.getElementById('stat-transcription').textContent = fmtMin(stats.transcription_s);
       const speedup = stats.audio_duration_s / stats.transcription_s;
       document.getElementById('stat-speedup').textContent = speedup.toFixed(1) + 'x realtime';
-      document.getElementById('stat-diarization').textContent = fmtMin(stats.diarization_s);
+      document.getElementById('stat-diarization').textContent =
+        stats.diarization_s > 0 ? fmtMin(stats.diarization_s) : '—';
       statsBox.style.display = 'block';
     }
   }

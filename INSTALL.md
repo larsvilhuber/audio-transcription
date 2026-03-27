@@ -4,9 +4,12 @@
 
 - Python 3.10+
 - `ffmpeg` installed and on PATH
-- CUDA-capable GPU recommended (falls back to CPU)
 - nginx installed
-- A Hugging Face token with access to the pyannote diarization models
+- For **Precise** model (WhisperX `large-v3`): CUDA GPU with **≥ 10 GB VRAM** (tested on 12 GB)
+- For **Fast** model (WhisperX `base`): any CUDA GPU, or CPU (slower)
+- For **Mistral Voxtral** model: internet access only — no local GPU required
+- A [Hugging Face token](https://huggingface.co/settings/tokens) with access to the pyannote diarization models (required for Precise / Fast)
+- A [Mistral AI API key](https://console.mistral.ai/api-keys/) (required for Mistral Voxtral)
 
 ---
 
@@ -23,11 +26,21 @@ The `.env` lives **outside** the app directory so it is never overwritten by a `
 
 ```bash
 cat > /home/transcription/.env << 'EOF'
+# Required for Precise and Fast (WhisperX) models.
+# Get your token at https://huggingface.co/settings/tokens
+# You must also accept the pyannote model conditions on Hugging Face.
 HF_TOKEN=hf_your_token_here
+
+# Required for the Mistral Voxtral model.
+# Get your API key at https://console.mistral.ai/api-keys/
+MISTRAL_API_KEY=your_mistral_key_here
+
 APP_BASE_PATH=/audio/
 EOF
 chmod 600 /home/transcription/.env
 ```
+
+Only include the key(s) for the backend(s) you intend to use.
 
 ## 3. Set up the Python virtual environment
 
@@ -123,7 +136,7 @@ curl -s http://127.0.0.1:5000/        # returns HTML
 # Through nginx
 curl -s http://cv-ai/audio/            # returns HTML
 
-# Upload test (model: "fast" or "precise")
+# Upload test (model: "fast", "precise", or "mistral")
 curl -s -X POST http://cv-ai/audio/upload \
      -F "audio=@test.mp3" \
      -F "model=precise"
