@@ -4,3 +4,4 @@ whisperx
 python-dotenv
 flask
 python-docx
+mistralai

@@ -4,6 +4,7 @@ import io
 import subprocess
 import threading
 import time
+import wave
 import torch
 import whisperx
 from docx import Document
@@ -20,6 +21,7 @@ _compute_type = "float16" if _device == "cuda" else "int8"
 
 MODEL_FAST    = "base"
 MODEL_PRECISE = "large-v3"
+MODEL_MISTRAL = "voxtral-mini-2507"
 
 
 def _get_model(model_name: str):
@@ -95,7 +97,28 @@ def segments_to_docx(segments, filename):
     return buf.read()
 
 
+def text_to_docx(text, filename):
+    """Convert plain text to DOCX bytes (no speaker labels)."""
+    doc = Document()
+    doc.add_heading(filename, level=1)
+    for paragraph in text.split("\n\n"):
+        if paragraph.strip():
+            doc.add_paragraph(paragraph.strip())
+    buf = io.BytesIO()
+    doc.save(buf)
+    buf.seek(0)
+    return buf.read()
+
+
 def run_transcription(job, wav_path, filename, model_name: str = MODEL_PRECISE):
+    """Dispatch to the appropriate transcription backend."""
+    if model_name == MODEL_MISTRAL:
+        _run_mistral(job, wav_path, filename)
+    else:
+        _run_whisperx(job, wav_path, filename, model_name)
+
+
+def _run_whisperx(job, wav_path, filename, model_name: str):
     """Run full WhisperX pipeline and update job dict in-place."""
     hf_token = os.environ.get("HF_TOKEN")
     if not hf_token:
@@ -174,6 +197,68 @@ def run_transcription(job, wav_path, filename, model_name: str = MODEL_PRECISE):
         # Unload all models and free VRAM
         _unload_models()
         # Clean up temp WAV
+        try:
+            os.remove(wav_path)
+        except OSError:
+            pass
+
+
+def _run_mistral(job, wav_path, filename):
+    """Run Mistral Voxtral API transcription and update job dict in-place."""
+    api_key = os.environ.get("MISTRAL_API_KEY")
+    if not api_key:
+        job["status"] = "error"
+        job["error"] = "MISTRAL_API_KEY not set"
+        return
+
+    def cancelled():
+        return job.get("cancelled", False)
+
+    try:
+        from mistralai import Mistral
+
+        # Measure audio duration from WAV header without loading full audio
+        with wave.open(wav_path, "rb") as wf:
+            audio_duration_s = wf.getnframes() / float(wf.getframerate())
+
+        if cancelled():
+            job["status"] = "cancelled"
+            return
+
+        job["progress"] = "Transcribing with Mistral Voxtral..."
+        client = Mistral(api_key=api_key)
+        t0 = time.time()
+        with open(wav_path, "rb") as f:
+            response = client.audio.transcriptions.create(
+                model=MODEL_MISTRAL,
+                file=("audio.wav", f, "audio/wav"),
+            )
+        transcription_s = time.time() - t0
+
+        if cancelled():
+            job["status"] = "cancelled"
+            return
+
+        language = getattr(response, "language", None)
+        if language:
+            job["language"] = language
+
+        job["progress"] = "Generating output files..."
+        text = response.text
+        job["txt"] = text
+        job["docx"] = text_to_docx(text, filename)
+        job["stats"] = {
+            "audio_duration_s": audio_duration_s,
+            "transcription_s": transcription_s,
+            "diarization_s": 0,
+        }
+        job["status"] = "done"
+        job["progress"] = "Complete"
+
+    except Exception as exc:
+        job["status"] = "error"
+        job["error"] = str(exc)
+    finally:
         try:
             os.remove(wav_path)
         except OSError:

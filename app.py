@@ -6,7 +6,7 @@ from pathlib import Path
 from flask import Flask, request, jsonify, render_template, send_file
 import io
 
-from transcriber import convert_to_wav, run_transcription, MODEL_FAST, MODEL_PRECISE
+from transcriber import convert_to_wav, run_transcription, MODEL_FAST, MODEL_PRECISE, MODEL_MISTRAL
 
 UPLOAD_DIR = Path("/tmp/audio-transcription")
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
@@ -49,7 +49,12 @@ def upload():
         return jsonify({"error": "Unsupported file type"}), 400
 
     model_choice = request.form.get("model", "precise")
-    model_name = MODEL_FAST if model_choice == "fast" else MODEL_PRECISE
+    if model_choice == "fast":
+        model_name = MODEL_FAST
+    elif model_choice == "mistral":
+        model_name = MODEL_MISTRAL
+    else:
+        model_name = MODEL_PRECISE
 
     job_id = str(uuid.uuid4())
     suffix = Path(f.filename).suffix.lower()
