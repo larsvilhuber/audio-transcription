@@ -1,4 +1,6 @@
 import os
+import sys
+import time
 import uuid
 import threading
 from pathlib import Path
@@ -25,6 +27,37 @@ def _allowed(filename: str) -> bool:
 
 
 BASE_PATH = os.environ.get("APP_BASE_PATH", "/")
+
+IDLE_GPU_TIMEOUT = float(os.environ.get("IDLE_GPU_TIMEOUT_HOURS", "1.0")) * 3600
+
+_last_gpu_activity: float | None = None
+_gpu_activity_lock = threading.Lock()
+
+
+def _update_gpu_activity():
+    global _last_gpu_activity
+    with _gpu_activity_lock:
+        _last_gpu_activity = time.monotonic()
+
+
+def _idle_monitor():
+    while True:
+        time.sleep(60)
+        with _gpu_activity_lock:
+            last = _last_gpu_activity
+        if last is None:
+            continue
+        if time.monotonic() - last < IDLE_GPU_TIMEOUT:
+            continue
+        with JOBS_LOCK:
+            any_running = any(j["status"] == "running" for j in JOBS.values())
+        if any_running:
+            continue
+        print("GPU idle timeout reached — restarting to free VRAM", flush=True)
+        os.execv(sys.executable, [sys.executable] + sys.argv)
+
+
+threading.Thread(target=_idle_monitor, daemon=True, name="idle-gpu-monitor").start()
 
 
 @app.route("/")
@@ -83,8 +116,14 @@ def upload():
     with JOBS_LOCK:
         JOBS[job_id] = job
 
+    def _run_job(job, wav_path, filename, model_name):
+        try:
+            run_transcription(job, wav_path, filename, model_name)
+        finally:
+            _update_gpu_activity()
+
     t = threading.Thread(
-        target=run_transcription,
+        target=_run_job,
         args=(job, wav_path, f.filename, model_name),
         daemon=True,
     )
