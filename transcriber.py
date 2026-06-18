@@ -114,19 +114,18 @@ def run_transcription(job, wav_path, filename, model_name: str = MODEL_PRECISE, 
             job["status"] = "cancelled"
             return
 
-        job["progress"] = "Transcribing audio..."
         audio = whisperx.load_audio(wav_path)
         audio_duration_s = len(audio) / 16000.0
 
-        t0 = time.time()
-        transcribe_kwargs = {"batch_size": 4}
-        if language:
-            transcribe_kwargs["language"] = language
-        result = model.transcribe(audio, **transcribe_kwargs)
-        transcription_s = time.time() - t0
-
-        language = result["language"]
+        if not language:
+            job["progress"] = "Detecting language..."
+            language, _ = model.detect_language(audio)
         job["language"] = language
+
+        job["progress"] = "Transcribing audio..."
+        t0 = time.time()
+        result = model.transcribe(audio, batch_size=4, language=language)
+        transcription_s = time.time() - t0
 
         if cancelled():
             job["status"] = "cancelled"
