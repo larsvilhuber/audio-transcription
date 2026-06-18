@@ -228,6 +228,28 @@
     }
     #retranscribe-btn:hover { background: #1d4ed8; }
     #retranscribe-btn:disabled { background: #93c5fd; cursor: not-allowed; }
+    .start-lang-row {
+      display: flex;
+      align-items: center;
+      gap: 0.6rem;
+      margin-top: 1.25rem;
+    }
+    .start-lang-row label {
+      font-size: 0.875rem;
+      font-weight: 500;
+      color: #374151;
+      white-space: nowrap;
+    }
+    #start-lang-select {
+      flex: 1;
+      padding: 0.55rem 0.5rem;
+      border: 1px solid #d1d5db;
+      border-radius: 8px;
+      font-size: 0.875rem;
+      background: #f9fafb;
+      cursor: pointer;
+      color: #374151;
+    }
   </style>
 </head>
 <body>
@@ -251,6 +273,13 @@
     <label for="model-precise">Precise <small>large-v3, slower</small></label>
     <input type="radio" name="model" id="model-fast" value="fast">
     <label for="model-fast">Fast <small>base, quicker</small></label>
+  </div>
+
+  <div class="start-lang-row">
+    <label for="start-lang-select">Language</label>
+    <select id="start-lang-select">
+      <option value="">Auto-detect</option>
+    </select>
   </div>
 
   <div class="btn-row">
@@ -336,11 +365,15 @@
     ['ur','Urdu'],['vi','Vietnamese'],['zh','Chinese'],
   ];
 
+  const startLangSelect = document.getElementById('start-lang-select');
+
   LANGUAGES.forEach(([code, name]) => {
-    const opt = document.createElement('option');
-    opt.value = code;
-    opt.textContent = name;
-    langSelect.appendChild(opt);
+    for (const sel of [langSelect, startLangSelect]) {
+      const opt = document.createElement('option');
+      opt.value = code;
+      opt.textContent = name;
+      sel.appendChild(opt);
+    }
   });
 
   function formatBytes(n) {
@@ -509,7 +542,7 @@
     }
   }
 
-  btn.addEventListener('click', () => startTranscription(null));
+  btn.addEventListener('click', () => startTranscription(startLangSelect.value || null));
 
   retranscribeBtn.addEventListener('click', async () => {
     if (!selectedFile) return;

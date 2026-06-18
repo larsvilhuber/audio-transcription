@@ -134,7 +134,7 @@ def run_transcription(job, wav_path, filename, model_name: str = MODEL_PRECISE, 
         if not language:
             job["progress"] = "Detecting language..."
             try:
-                detected, _ = model.detect_language(audio)
+                detected = model.detect_language(audio)
                 if detected in _WHISPER_LANGUAGES:
                     language = detected
             except Exception:
