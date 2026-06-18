@@ -499,6 +499,7 @@
       }
       currentJobId = data.job_id;
       stopBtn.style.display = 'inline-block';
+      retranscribeBtn.disabled = false;
       showSpinner('Queued — waiting for transcription...');
       startPolling(data.job_id, !!forcedLang);
     } catch (err) {
