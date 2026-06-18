@@ -180,3 +180,10 @@ def run_transcription(job, wav_path, filename, model_name: str = MODEL_PRECISE, 
             os.remove(wav_path)
         except OSError:
             pass
+
+
+def transcription_proc(job, wav_path, filename, model_name, language):
+    """Subprocess entry point — must live in transcriber.py so that spawn
+    imports only this module, not app.py (which would recreate the Manager
+    and idle-monitor thread inside the worker process)."""
+    run_transcription(job, wav_path, filename, model_name, language=language)

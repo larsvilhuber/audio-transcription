@@ -9,7 +9,7 @@ from pathlib import Path
 from flask import Flask, request, jsonify, render_template, send_file
 import io
 
-from transcriber import convert_to_wav, run_transcription, MODEL_FAST, MODEL_PRECISE
+from transcriber import convert_to_wav, run_transcription, transcription_proc, MODEL_FAST, MODEL_PRECISE
 
 UPLOAD_DIR = Path("/tmp/audio-transcription")
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
@@ -26,8 +26,12 @@ JOBS_LOCK = threading.Lock()
 _PROCESSES: dict[str, multiprocessing.Process] = {}
 _PROCESSES_LOCK = threading.Lock()
 
-# Manager server provides a shared dict that the subprocess can write to and
-# the Flask process can read from.
+# Use spawn so worker processes start with a clean CUDA context — fork after
+# torch.cuda.is_available() leaves a broken CUDA state in the child.
+_mp_ctx = multiprocessing.get_context("spawn")
+
+# Manager server provides a shared dict the subprocess can write to and
+# Flask can read from. Fork is fine here; the manager server never uses CUDA.
 _mp_manager = multiprocessing.Manager()
 
 BASE_PATH = os.environ.get("APP_BASE_PATH", "/")
@@ -63,11 +67,6 @@ def _idle_monitor():
 
 
 threading.Thread(target=_idle_monitor, daemon=True, name="idle-gpu-monitor").start()
-
-
-def _transcription_proc(job, wav_path, filename, model_name, language):
-    """Subprocess entry point — runs the full transcription pipeline."""
-    run_transcription(job, wav_path, filename, model_name, language=language)
 
 
 def _allowed(filename: str) -> bool:
@@ -134,8 +133,8 @@ def upload():
     with JOBS_LOCK:
         JOBS[job_id] = job
 
-    p = multiprocessing.Process(
-        target=_transcription_proc,
+    p = _mp_ctx.Process(
+        target=transcription_proc,
         args=(job, wav_path, f.filename, model_name, language),
         daemon=True,
     )
