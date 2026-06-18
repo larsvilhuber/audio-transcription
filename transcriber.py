@@ -95,7 +95,7 @@ def segments_to_docx(segments, filename):
     return buf.read()
 
 
-def run_transcription(job, wav_path, filename, model_name: str = MODEL_PRECISE):
+def run_transcription(job, wav_path, filename, model_name: str = MODEL_PRECISE, language: str | None = None):
     """Run full WhisperX pipeline and update job dict in-place."""
     hf_token = os.environ.get("HF_TOKEN")
     if not hf_token:
@@ -119,7 +119,10 @@ def run_transcription(job, wav_path, filename, model_name: str = MODEL_PRECISE):
         audio_duration_s = len(audio) / 16000.0
 
         t0 = time.time()
-        result = model.transcribe(audio, batch_size=4)
+        transcribe_kwargs = {"batch_size": 4}
+        if language:
+            transcribe_kwargs["language"] = language
+        result = model.transcribe(audio, **transcribe_kwargs)
         transcription_s = time.time() - t0
 
         language = result["language"]

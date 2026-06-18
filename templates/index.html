@@ -190,6 +190,44 @@
       color: #4b5563;
       font-weight: normal;
     }
+    #lang-override {
+      margin-top: 0.75rem;
+      background: #f9fafb;
+      border: 1px solid #e5e7eb;
+      border-radius: 8px;
+      padding: 0.75rem 1rem;
+      display: none;
+    }
+    .lang-row {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      margin-top: 0.4rem;
+    }
+    #lang-select {
+      flex: 1;
+      padding: 0.4rem 0.5rem;
+      border: 1px solid #d1d5db;
+      border-radius: 6px;
+      font-size: 0.875rem;
+      background: #fff;
+      cursor: pointer;
+      color: #374151;
+    }
+    #retranscribe-btn {
+      padding: 0.4rem 0.9rem;
+      background: #2563eb;
+      color: #fff;
+      border: none;
+      border-radius: 6px;
+      font-size: 0.875rem;
+      font-weight: 500;
+      cursor: pointer;
+      white-space: nowrap;
+      transition: background 0.2s;
+    }
+    #retranscribe-btn:hover { background: #1d4ed8; }
+    #retranscribe-btn:disabled { background: #93c5fd; cursor: not-allowed; }
   </style>
 </head>
 <body>
@@ -224,6 +262,13 @@
     <div class="label">Status</div>
     <div id="status-text"></div>
   </div>
+  <div id="lang-override">
+    <div class="label" id="lang-override-label">Detected language</div>
+    <div class="lang-row">
+      <select id="lang-select"></select>
+      <button id="retranscribe-btn">&#8635; Retranscribe</button>
+    </div>
+  </div>
   <div id="error-msg"></div>
   <div id="stats-box">
     <div class="stats-grid">
@@ -255,22 +300,48 @@
 </div>
 
 <script>
-  const dropZone   = document.getElementById('drop-zone');
-  const fileInput  = document.getElementById('file-input');
-  const fileInfo   = document.getElementById('file-info');
-  const btn        = document.getElementById('transcribe-btn');
-  const stopBtn    = document.getElementById('stop-btn');
-  const statusBox  = document.getElementById('status-box');
-  const statusText = document.getElementById('status-text');
-  const downloads  = document.getElementById('downloads');
-  const errorMsg   = document.getElementById('error-msg');
-  const dlTxt      = document.getElementById('dl-txt');
-  const dlDocx     = document.getElementById('dl-docx');
-  const statsBox   = document.getElementById('stats-box');
+  const dropZone        = document.getElementById('drop-zone');
+  const fileInput       = document.getElementById('file-input');
+  const fileInfo        = document.getElementById('file-info');
+  const btn             = document.getElementById('transcribe-btn');
+  const stopBtn         = document.getElementById('stop-btn');
+  const statusBox       = document.getElementById('status-box');
+  const statusText      = document.getElementById('status-text');
+  const downloads       = document.getElementById('downloads');
+  const errorMsg        = document.getElementById('error-msg');
+  const dlTxt           = document.getElementById('dl-txt');
+  const dlDocx          = document.getElementById('dl-docx');
+  const statsBox        = document.getElementById('stats-box');
+  const langOverride    = document.getElementById('lang-override');
+  const langSelect      = document.getElementById('lang-select');
+  const retranscribeBtn = document.getElementById('retranscribe-btn');
 
   let selectedFile = null;
   let pollInterval = null;
   let currentJobId = null;
+
+  const LANGUAGES = [
+    ['af','Afrikaans'],['ar','Arabic'],['bg','Bulgarian'],['ca','Catalan'],
+    ['cs','Czech'],['cy','Welsh'],['da','Danish'],['de','German'],
+    ['el','Greek'],['en','English'],['es','Spanish'],['et','Estonian'],
+    ['fa','Persian'],['fi','Finnish'],['fr','French'],['gl','Galician'],
+    ['he','Hebrew'],['hi','Hindi'],['hr','Croatian'],['hu','Hungarian'],
+    ['hy','Armenian'],['id','Indonesian'],['is','Icelandic'],['it','Italian'],
+    ['ja','Japanese'],['ka','Georgian'],['kk','Kazakh'],['ko','Korean'],
+    ['lt','Lithuanian'],['lv','Latvian'],['mk','Macedonian'],['ms','Malay'],
+    ['nl','Dutch'],['no','Norwegian'],['pl','Polish'],['pt','Portuguese'],
+    ['ro','Romanian'],['ru','Russian'],['sk','Slovak'],['sl','Slovenian'],
+    ['sq','Albanian'],['sr','Serbian'],['sv','Swedish'],['sw','Swahili'],
+    ['ta','Tamil'],['th','Thai'],['tr','Turkish'],['uk','Ukrainian'],
+    ['ur','Urdu'],['vi','Vietnamese'],['zh','Chinese'],
+  ];
+
+  LANGUAGES.forEach(([code, name]) => {
+    const opt = document.createElement('option');
+    opt.value = code;
+    opt.textContent = name;
+    langSelect.appendChild(opt);
+  });
 
   function formatBytes(n) {
     if (n < 1024) return n + ' B';
@@ -286,10 +357,11 @@
     selectedFile = file;
     fileInfo.textContent = `${file.name} (${formatBytes(file.size)})`;
     btn.disabled = false;
-    downloads.style.display = 'none';
-    statusBox.style.display  = 'none';
-    statsBox.style.display   = 'none';
-    errorMsg.style.display   = 'none';
+    downloads.style.display    = 'none';
+    statusBox.style.display    = 'none';
+    statsBox.style.display     = 'none';
+    errorMsg.style.display     = 'none';
+    langOverride.style.display = 'none';
   }
 
   dropZone.addEventListener('click', () => fileInput.click());
@@ -329,6 +401,14 @@
     }
   }
 
+  function maybeShowLangOverride(lang, isForced) {
+    if (langOverride.style.display !== 'none') return;
+    langSelect.value = lang || '';
+    document.getElementById('lang-override-label').textContent =
+      isForced ? 'Language (forced)' : 'Auto-detected language';
+    langOverride.style.display = 'block';
+  }
+
   function showError(msg) {
     statusBox.style.display = 'none';
     errorMsg.textContent = `Error: ${msg}`;
@@ -338,15 +418,17 @@
   function stopRunning() {
     stopBtn.style.display = 'none';
     btn.disabled = false;
+    retranscribeBtn.disabled = false;
     clearInterval(pollInterval);
     pollInterval = null;
   }
 
-  function startPolling(jobId) {
+  function startPolling(jobId, isForced) {
     pollInterval = setInterval(async () => {
       try {
         const r = await fetch(`status/${jobId}`);
         const data = await r.json();
+        if (data.language) maybeShowLangOverride(data.language, isForced);
         if (data.status === 'running') {
           showSpinner(data.progress || 'Processing...', data.language);
         } else if (data.status === 'done') {
@@ -376,15 +458,17 @@
     } catch (_) { /* ignore */ }
   });
 
-  btn.addEventListener('click', async () => {
+  async function startTranscription(forcedLang) {
     if (!selectedFile) return;
     btn.disabled = true;
+    retranscribeBtn.disabled = true;
     stopBtn.style.display = 'none';
     stopBtn.disabled = false;
     stopBtn.textContent = '⏹ Stop';
-    downloads.style.display = 'none';
-    statsBox.style.display  = 'none';
-    errorMsg.style.display  = 'none';
+    downloads.style.display    = 'none';
+    statsBox.style.display     = 'none';
+    errorMsg.style.display     = 'none';
+    langOverride.style.display = 'none';
     currentJobId = null;
     showSpinner('Uploading...');
 
@@ -392,6 +476,7 @@
     const form = new FormData();
     form.append('audio', selectedFile);
     form.append('model', model);
+    if (forcedLang) form.append('language', forcedLang);
 
     try {
       const r = await fetch('upload', { method: 'POST', body: form });
@@ -403,21 +488,38 @@
                    : `Unexpected server response (HTTP ${r.status})`;
         showError(hint);
         btn.disabled = false;
+        retranscribeBtn.disabled = false;
         return;
       }
       if (!r.ok || data.error) {
         showError(data.error || 'Upload failed');
         btn.disabled = false;
+        retranscribeBtn.disabled = false;
         return;
       }
       currentJobId = data.job_id;
       stopBtn.style.display = 'inline-block';
       showSpinner('Queued — waiting for transcription...');
-      startPolling(data.job_id);
+      startPolling(data.job_id, !!forcedLang);
     } catch (err) {
       showError('Upload failed: ' + err.message);
       btn.disabled = false;
+      retranscribeBtn.disabled = false;
     }
+  }
+
+  btn.addEventListener('click', () => startTranscription(null));
+
+  retranscribeBtn.addEventListener('click', async () => {
+    if (!selectedFile) return;
+    const newLang = langSelect.value;
+    if (currentJobId && pollInterval) {
+      clearInterval(pollInterval);
+      pollInterval = null;
+      try { await fetch(`cancel/${currentJobId}`, { method: 'POST' }); } catch (_) {}
+      currentJobId = null;
+    }
+    await startTranscription(newLang);
   });
 </script>
 </body>

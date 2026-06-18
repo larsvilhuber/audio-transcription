@@ -84,6 +84,10 @@ def upload():
     model_choice = request.form.get("model", "precise")
     model_name = MODEL_FAST if model_choice == "fast" else MODEL_PRECISE
 
+    language = request.form.get("language") or None
+    if language and (len(language) > 8 or not language.isalpha()):
+        language = None
+
     job_id = str(uuid.uuid4())
     suffix = Path(f.filename).suffix.lower()
     raw_path = UPLOAD_DIR / f"{job_id}{suffix}"
@@ -116,15 +120,15 @@ def upload():
     with JOBS_LOCK:
         JOBS[job_id] = job
 
-    def _run_job(job, wav_path, filename, model_name):
+    def _run_job(job, wav_path, filename, model_name, language):
         try:
-            run_transcription(job, wav_path, filename, model_name)
+            run_transcription(job, wav_path, filename, model_name, language=language)
         finally:
             _update_gpu_activity()
 
     t = threading.Thread(
         target=_run_job,
-        args=(job, wav_path, f.filename, model_name),
+        args=(job, wav_path, f.filename, model_name, language),
         daemon=True,
     )
     t.start()
