@@ -21,6 +21,20 @@ _compute_type = "float16" if _device == "cuda" else "int8"
 MODEL_FAST    = "base"
 MODEL_PRECISE = "large-v3"
 
+# Valid whisper language codes — used to validate detect_language() output,
+# which can return a malformed token on some whisperx versions.
+_WHISPER_LANGUAGES = {
+    'af', 'am', 'ar', 'as', 'az', 'ba', 'be', 'bg', 'bn', 'bo', 'br', 'bs',
+    'ca', 'cs', 'cy', 'da', 'de', 'el', 'en', 'es', 'et', 'eu', 'fa', 'fi',
+    'fo', 'fr', 'gl', 'gu', 'ha', 'haw', 'he', 'hi', 'hr', 'ht', 'hu', 'hy',
+    'id', 'is', 'it', 'ja', 'jw', 'ka', 'kk', 'km', 'kn', 'ko', 'la', 'lb',
+    'ln', 'lo', 'lt', 'lv', 'mg', 'mi', 'mk', 'ml', 'mn', 'mr', 'ms', 'mt',
+    'my', 'ne', 'nl', 'nn', 'no', 'oc', 'pa', 'pl', 'ps', 'pt', 'ro', 'ru',
+    'sa', 'sd', 'si', 'sk', 'sl', 'sn', 'so', 'sq', 'sr', 'su', 'sv', 'sw',
+    'ta', 'te', 'tg', 'th', 'tk', 'tl', 'tr', 'tt', 'uk', 'ur', 'uz', 'vi',
+    'yi', 'yo', 'zh', 'yue',
+}
+
 
 def _get_model(model_name: str):
     with _model_lock:
@@ -119,13 +133,25 @@ def run_transcription(job, wav_path, filename, model_name: str = MODEL_PRECISE, 
 
         if not language:
             job["progress"] = "Detecting language..."
-            language, _ = model.detect_language(audio)
-        job["language"] = language
+            try:
+                detected, _ = model.detect_language(audio)
+                if detected in _WHISPER_LANGUAGES:
+                    language = detected
+            except Exception:
+                pass
+        if language:
+            job["language"] = language
 
         job["progress"] = "Transcribing audio..."
         t0 = time.time()
-        result = model.transcribe(audio, batch_size=4, language=language)
+        transcribe_kwargs = {"batch_size": 4}
+        if language:
+            transcribe_kwargs["language"] = language
+        result = model.transcribe(audio, **transcribe_kwargs)
         transcription_s = time.time() - t0
+
+        language = result["language"]
+        job["language"] = language
 
         if cancelled():
             job["status"] = "cancelled"
