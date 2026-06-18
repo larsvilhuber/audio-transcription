@@ -3,6 +3,7 @@ import sys
 import time
 import uuid
 import threading
+import multiprocessing
 from pathlib import Path
 
 from flask import Flask, request, jsonify, render_template, send_file
@@ -21,10 +22,13 @@ app.config["MAX_CONTENT_LENGTH"] = 500 * 1024 * 1024  # 500 MB
 JOBS: dict[str, dict] = {}
 JOBS_LOCK = threading.Lock()
 
+# Per-job subprocess handles, so cancel can kill immediately.
+_PROCESSES: dict[str, multiprocessing.Process] = {}
+_PROCESSES_LOCK = threading.Lock()
 
-def _allowed(filename: str) -> bool:
-    return Path(filename).suffix.lower() in ALLOWED_EXTENSIONS
-
+# Manager server provides a shared dict that the subprocess can write to and
+# the Flask process can read from.
+_mp_manager = multiprocessing.Manager()
 
 BASE_PATH = os.environ.get("APP_BASE_PATH", "/")
 
@@ -54,10 +58,20 @@ def _idle_monitor():
         if any_running:
             continue
         print("GPU idle timeout reached — restarting to free VRAM", flush=True)
+        _mp_manager.shutdown()
         os.execv(sys.executable, [sys.executable] + sys.argv)
 
 
 threading.Thread(target=_idle_monitor, daemon=True, name="idle-gpu-monitor").start()
+
+
+def _transcription_proc(job, wav_path, filename, model_name, language):
+    """Subprocess entry point — runs the full transcription pipeline."""
+    run_transcription(job, wav_path, filename, model_name, language=language)
+
+
+def _allowed(filename: str) -> bool:
+    return Path(filename).suffix.lower() in ALLOWED_EXTENSIONS
 
 
 @app.route("/")
@@ -107,7 +121,7 @@ def upload():
             if suffix != ".wav":
                 raw_path.unlink(missing_ok=True)
 
-    job = {
+    job = _mp_manager.dict({
         "status": "running",
         "progress": "Queued",
         "filename": f.filename,
@@ -116,22 +130,31 @@ def upload():
         "txt": None,
         "docx": None,
         "error": None,
-    }
+    })
     with JOBS_LOCK:
         JOBS[job_id] = job
 
-    def _run_job(job, wav_path, filename, model_name, language):
-        try:
-            run_transcription(job, wav_path, filename, model_name, language=language)
-        finally:
-            _update_gpu_activity()
-
-    t = threading.Thread(
-        target=_run_job,
+    p = multiprocessing.Process(
+        target=_transcription_proc,
         args=(job, wav_path, f.filename, model_name, language),
         daemon=True,
     )
-    t.start()
+    with _PROCESSES_LOCK:
+        _PROCESSES[job_id] = p
+    p.start()
+
+    def _monitor():
+        p.join()
+        _update_gpu_activity()
+        with _PROCESSES_LOCK:
+            _PROCESSES.pop(job_id, None)
+        # Clean up WAV if the process was killed before its finally block ran
+        try:
+            os.remove(wav_path)
+        except OSError:
+            pass
+
+    threading.Thread(target=_monitor, daemon=True).start()
 
     return jsonify({"job_id": job_id})
 
@@ -160,9 +183,16 @@ def cancel(job_id):
         job = JOBS.get(job_id)
     if job is None:
         return jsonify({"error": "Job not found"}), 404
+    with _PROCESSES_LOCK:
+        p = _PROCESSES.get(job_id)
+    if p and p.is_alive():
+        p.terminate()
+        p.join(timeout=3)
+        if p.is_alive():
+            p.kill()
     if job["status"] == "running":
-        job["cancelled"] = True
-        job["progress"] = "Cancelling..."
+        job["status"] = "cancelled"
+        job["progress"] = "Cancelled"
     return jsonify({"ok": True})
 
 
