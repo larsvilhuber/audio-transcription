@@ -32,8 +32,10 @@ _PROCESSES_LOCK = threading.Lock()
 _mp_ctx = multiprocessing.get_context("spawn")
 
 # Manager server provides a shared dict the subprocess can write to and
-# Flask can read from. Fork is fine here; the manager server never uses CUDA.
-_mp_manager = multiprocessing.Manager()
+# Flask can read from. Created in main() — NOT at import — because `spawn`
+# re-imports this module in every worker; creating it here would spawn a
+# redundant manager process in each worker.
+_mp_manager = None
 
 BASE_PATH = os.environ.get("APP_BASE_PATH", "/")
 
@@ -81,9 +83,6 @@ def _idle_monitor():
         print("GPU idle timeout reached — restarting to free VRAM", flush=True)
         _mp_manager.shutdown()
         os.execv(sys.executable, [sys.executable] + sys.argv)
-
-
-threading.Thread(target=_idle_monitor, daemon=True, name="idle-gpu-monitor").start()
 
 
 def _allowed(filename: str) -> bool:
@@ -167,9 +166,6 @@ def _load_jobs_from_disk():
             JOBS[jid] = restored
         else:
             storage.delete_job(jid)
-
-
-_load_jobs_from_disk()
 
 
 @app.route("/")
@@ -321,5 +317,19 @@ def retranscribe(job_id):
     return jsonify({"job_id": new_id})
 
 
-if __name__ == "__main__":
+def main():
+    # All startup side effects live here so they run ONLY in the real main
+    # process. `spawn` re-imports this module in every worker to rebuild
+    # __main__; doing these at import time would make each worker recreate the
+    # Manager, start an idle monitor, and — worst — re-run the disk loader,
+    # which deletes the very job the worker is running (its meta is still
+    # "running"), wiping the source audio and initial meta.
+    global _mp_manager
+    _mp_manager = multiprocessing.Manager()
+    _load_jobs_from_disk()
+    threading.Thread(target=_idle_monitor, daemon=True, name="idle-gpu-monitor").start()
     app.run(host="0.0.0.0", port=5000, debug=False)
+
+
+if __name__ == "__main__":
+    main()

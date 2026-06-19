@@ -250,6 +250,96 @@
       cursor: pointer;
       color: #374151;
     }
+    #recent-section { margin-top: 2rem; display: none; }
+    #recent-section h2 {
+      font-size: 0.95rem;
+      font-weight: 600;
+      color: #374151;
+      margin-bottom: 0.75rem;
+      padding-top: 1.5rem;
+      border-top: 1px solid #eceef1;
+    }
+    #recent-list { list-style: none; display: flex; flex-direction: column; gap: 0.6rem; }
+    .recent-item {
+      border: 1px solid #e5e7eb;
+      border-radius: 8px;
+      padding: 0.7rem 0.85rem;
+      background: #fafafa;
+    }
+    .recent-name {
+      font: inherit;
+      font-weight: 600;
+      font-size: 0.9rem;
+      color: #1d4ed8;
+      background: none;
+      border: none;
+      padding: 0;
+      cursor: pointer;
+      display: block;
+      width: 100%;
+      text-align: left;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .recent-name:hover { text-decoration: underline; }
+    .recent-meta {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      margin-top: 0.35rem;
+      font-size: 0.75rem;
+      color: #6b7280;
+    }
+    .recent-badge {
+      display: inline-block;
+      padding: 0.1rem 0.45rem;
+      border-radius: 4px;
+      font-size: 0.68rem;
+      font-weight: 600;
+      letter-spacing: 0.03em;
+      background: #eef2ff;
+      color: #4338ca;
+    }
+    .recent-actions {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      margin-top: 0.6rem;
+      flex-wrap: wrap;
+    }
+    .recent-actions a {
+      font-size: 0.78rem;
+      text-decoration: none;
+      padding: 0.3rem 0.7rem;
+      border-radius: 5px;
+      font-weight: 500;
+    }
+    .recent-actions select {
+      font: inherit;
+      font-size: 0.78rem;
+      padding: 0.3rem 0.35rem;
+      border: 1px solid #d1d5db;
+      border-radius: 5px;
+      background: #fff;
+      color: #374151;
+      cursor: pointer;
+    }
+    .recent-actions .spacer { flex: 1; }
+    .recent-retr {
+      font: inherit;
+      font-size: 0.78rem;
+      font-weight: 500;
+      padding: 0.3rem 0.7rem;
+      border: 1px solid #c7d2fe;
+      border-radius: 5px;
+      background: #fff;
+      color: #4338ca;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+    .recent-retr:hover { background: #eef2ff; }
+    .recent-retr:disabled { opacity: 0.5; cursor: not-allowed; }
   </style>
 </head>
 <body>
@@ -585,7 +675,7 @@
     statusBox.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
   }
 
-  async function retranscribeRecent(item, model, btnEl) {
+  async function retranscribeRecent(item, model, language, btnEl) {
     btnEl.disabled = true;
     if (pollInterval) { clearInterval(pollInterval); pollInterval = null; }
     errorMsg.style.display     = 'none';
@@ -599,7 +689,7 @@
       const r = await fetch(`retranscribe/${item.job_id}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ model }),
+        body: JSON.stringify({ model, language: language || undefined }),
       });
       const data = await r.json();
       if (!r.ok || data.error) {
@@ -627,33 +717,34 @@
       const li = document.createElement('li');
       li.className = 'recent-item';
 
-      const head = document.createElement('div');
-      head.className = 'recent-head';
-
+      // Filename (truncated via CSS; full name on hover), click to reopen.
+      const fullName = item.filename || '(untitled)';
       const name = document.createElement('button');
       name.className = 'recent-name';
-      name.textContent = item.filename || '(untitled)';
-      name.title = 'Reopen this transcription';
+      name.textContent = fullName;
+      name.title = fullName;
       name.addEventListener('click', () => restoreJob(item));
-      head.appendChild(name);
+      li.appendChild(name);
 
-      const meta = document.createElement('span');
+      // Meta row: time · language · model
+      const meta = document.createElement('div');
       meta.className = 'recent-meta';
-      meta.textContent = timeAgo(item.created_at);
-      head.appendChild(meta);
-
+      const when = document.createElement('span');
+      when.textContent = timeAgo(item.created_at);
+      meta.appendChild(when);
       if (item.language) {
         const lb = document.createElement('span');
         lb.className = 'recent-badge';
         lb.textContent = item.language.toUpperCase();
-        head.appendChild(lb);
+        meta.appendChild(lb);
       }
       const mb = document.createElement('span');
       mb.className = 'recent-badge';
       mb.textContent = modelLabel(item.model);
-      head.appendChild(mb);
-      li.appendChild(head);
+      meta.appendChild(mb);
+      li.appendChild(meta);
 
+      // Actions row: downloads, then re-run controls (model + language).
       const actions = document.createElement('div');
       actions.className = 'recent-actions';
 
@@ -671,20 +762,40 @@
       docx.textContent = 'DOCX';
       actions.appendChild(docx);
 
-      const sel = document.createElement('select');
+      const spacer = document.createElement('span');
+      spacer.className = 'spacer';
+      actions.appendChild(spacer);
+
+      const modelSel = document.createElement('select');
+      modelSel.title = 'Model for re-run';
       ['precise', 'fast'].forEach(v => {
         const o = document.createElement('option');
         o.value = v;
         o.textContent = modelLabel(v);
         if (v === (item.model || 'precise')) o.selected = true;
-        sel.appendChild(o);
+        modelSel.appendChild(o);
       });
-      actions.appendChild(sel);
+      actions.appendChild(modelSel);
+
+      const langSel = document.createElement('select');
+      langSel.title = 'Language for re-run';
+      const auto = document.createElement('option');
+      auto.value = '';
+      auto.textContent = 'Auto';
+      langSel.appendChild(auto);
+      LANGUAGES.forEach(([code, lname]) => {
+        const o = document.createElement('option');
+        o.value = code;
+        o.textContent = lname;
+        if (code === item.language) o.selected = true;
+        langSel.appendChild(o);
+      });
+      actions.appendChild(langSel);
 
       const rbtn = document.createElement('button');
       rbtn.className = 'recent-retr';
       rbtn.innerHTML = '&#8635; Retranscribe';
-      rbtn.addEventListener('click', () => retranscribeRecent(item, sel.value, rbtn));
+      rbtn.addEventListener('click', () => retranscribeRecent(item, modelSel.value, langSel.value, rbtn));
       actions.appendChild(rbtn);
 
       li.appendChild(actions);
