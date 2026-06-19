@@ -2,14 +2,15 @@ import os
 import sys
 import time
 import uuid
+import shutil
 import threading
 import multiprocessing
 from pathlib import Path
 
 from flask import Flask, request, jsonify, render_template, send_file
-import io
 
-from transcriber import convert_to_wav, run_transcription, transcription_proc, MODEL_FAST, MODEL_PRECISE
+import storage
+from transcriber import convert_to_wav, transcription_proc, MODEL_FAST, MODEL_PRECISE
 
 UPLOAD_DIR = Path("/tmp/audio-transcription")
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
@@ -38,6 +39,8 @@ BASE_PATH = os.environ.get("APP_BASE_PATH", "/")
 
 IDLE_GPU_TIMEOUT = float(os.environ.get("IDLE_GPU_TIMEOUT_HOURS", "1.0")) * 3600
 
+RESULT_RETENTION = float(os.environ.get("RESULT_RETENTION_HOURS", "24.0")) * 3600
+
 _last_gpu_activity: float | None = None
 _gpu_activity_lock = threading.Lock()
 
@@ -48,9 +51,23 @@ def _update_gpu_activity():
         _last_gpu_activity = time.monotonic()
 
 
+def _purge_expired():
+    """Delete on-disk jobs past the retention window. Never purges a running
+    job (its dir is protected even if old — a long transcription can outlive
+    the window)."""
+    with JOBS_LOCK:
+        protected = {jid for jid, j in JOBS.items() if j.get("status") == "running"}
+    removed = storage.purge_expired(RESULT_RETENTION, protected)
+    if removed:
+        with JOBS_LOCK:
+            for jid in removed:
+                JOBS.pop(jid, None)
+
+
 def _idle_monitor():
     while True:
         time.sleep(60)
+        _purge_expired()
         with _gpu_activity_lock:
             last = _last_gpu_activity
         if last is None:
@@ -71,6 +88,88 @@ threading.Thread(target=_idle_monitor, daemon=True, name="idle-gpu-monitor").sta
 
 def _allowed(filename: str) -> bool:
     return Path(filename).suffix.lower() in ALLOWED_EXTENSIONS
+
+
+def _start_job(job_id, filename, model_choice, language, wav_path, created_at):
+    """Write the initial meta, spawn the worker subprocess, and start the
+    thread that reaps it. Shared by /upload and /retranscribe."""
+    model_name = MODEL_FAST if model_choice == "fast" else MODEL_PRECISE
+
+    storage.write_meta(job_id, {
+        "job_id": job_id,
+        "filename": filename,
+        "model": model_choice,
+        "status": "running",
+        "language": None,
+        "created_at": created_at,
+        "stats": None,
+        "error": None,
+    })
+
+    job = _mp_manager.dict({
+        "status": "running",
+        "progress": "Queued",
+        "filename": filename,
+        "language": None,
+        "cancelled": False,
+        "txt": None,
+        "docx": None,
+        "error": None,
+        "created_at": created_at,
+    })
+    with JOBS_LOCK:
+        JOBS[job_id] = job
+
+    p = _mp_ctx.Process(
+        target=transcription_proc,
+        args=(job, wav_path, filename, model_name, language, job_id),
+        daemon=True,
+    )
+    with _PROCESSES_LOCK:
+        _PROCESSES[job_id] = p
+    p.start()
+
+    def _monitor():
+        p.join()
+        _update_gpu_activity()
+        with _PROCESSES_LOCK:
+            _PROCESSES.pop(job_id, None)
+        # If the worker died without finalizing (crash/OOM), record an error so
+        # the dir doesn't linger as a stuck "running" job.
+        try:
+            if job.get("status") == "running":
+                job["status"] = "error"
+                job["error"] = "Worker exited unexpectedly"
+                storage.finalize_meta(job_id, "error", error="Worker exited unexpectedly")
+        except Exception:
+            pass
+        # Clean up the disposable WAV if the worker was killed before its
+        # finally block ran.
+        try:
+            os.remove(wav_path)
+        except OSError:
+            pass
+
+    threading.Thread(target=_monitor, daemon=True).start()
+
+
+def _load_jobs_from_disk():
+    """Rebuild the in-memory job index from disk on startup. Completed jobs are
+    restored as plain dicts; interrupted (non-done) jobs can never resume, so
+    their dirs are removed."""
+    for meta in storage.load_all():
+        jid = meta.get("job_id")
+        if not jid:
+            continue
+        if meta.get("status") == "done":
+            restored = dict(meta)
+            restored.setdefault("progress", "Complete")
+            JOBS[jid] = restored
+        else:
+            storage.delete_job(jid)
+
+
+_load_jobs_from_disk()
 
 
 @app.route("/")
@@ -95,7 +194,6 @@ def upload():
         return jsonify({"error": "Unsupported file type"}), 400
 
     model_choice = request.form.get("model", "precise")
-    model_name = MODEL_FAST if model_choice == "fast" else MODEL_PRECISE
 
     language = request.form.get("language") or None
     if language and (len(language) > 8 or not language.isalpha()):
@@ -103,58 +201,22 @@ def upload():
 
     job_id = str(uuid.uuid4())
     suffix = Path(f.filename).suffix.lower()
-    raw_path = UPLOAD_DIR / f"{job_id}{suffix}"
-    f.save(str(raw_path))
 
-    # Convert to WAV if needed
-    if suffix == ".wav":
-        wav_path = str(raw_path)
-    else:
-        wav_path = str(UPLOAD_DIR / f"{job_id}.wav")
-        try:
-            convert_to_wav(str(raw_path), wav_path)
-        except RuntimeError as exc:
-            raw_path.unlink(missing_ok=True)
-            return jsonify({"error": str(exc)}), 500
-        finally:
-            if suffix != ".wav":
-                raw_path.unlink(missing_ok=True)
+    # Keep the original audio so the job can be re-run with a different model.
+    source_path = storage.job_dir(job_id) / f"source{suffix}"
+    source_path.parent.mkdir(parents=True, exist_ok=True)
+    f.save(str(source_path))
 
-    job = _mp_manager.dict({
-        "status": "running",
-        "progress": "Queued",
-        "filename": f.filename,
-        "language": None,
-        "cancelled": False,
-        "txt": None,
-        "docx": None,
-        "error": None,
-    })
-    with JOBS_LOCK:
-        JOBS[job_id] = job
+    # Always normalize to a disposable 16 kHz mono WAV for the pipeline; the
+    # original stays in the job dir.
+    wav_path = str(UPLOAD_DIR / f"{job_id}.wav")
+    try:
+        convert_to_wav(str(source_path), wav_path)
+    except RuntimeError as exc:
+        storage.delete_job(job_id)
+        return jsonify({"error": str(exc)}), 500
 
-    p = _mp_ctx.Process(
-        target=transcription_proc,
-        args=(job, wav_path, f.filename, model_name, language),
-        daemon=True,
-    )
-    with _PROCESSES_LOCK:
-        _PROCESSES[job_id] = p
-    p.start()
-
-    def _monitor():
-        p.join()
-        _update_gpu_activity()
-        with _PROCESSES_LOCK:
-            _PROCESSES.pop(job_id, None)
-        # Clean up WAV if the process was killed before its finally block ran
-        try:
-            os.remove(wav_path)
-        except OSError:
-            pass
-
-    threading.Thread(target=_monitor, daemon=True).start()
-
+    _start_job(job_id, f.filename, model_choice, language, wav_path, time.time())
     return jsonify({"job_id": job_id})
 
 
@@ -192,37 +254,71 @@ def cancel(job_id):
     if job["status"] == "running":
         job["status"] = "cancelled"
         job["progress"] = "Cancelled"
+    # A cancelled job has no output worth keeping; drop its dir so it never
+    # shows up in the recent list or survives a restart.
+    storage.delete_job(job_id)
     return jsonify({"ok": True})
+
+
+def _download(job_id, kind):
+    meta = storage.read_meta(job_id)
+    if meta is None or meta.get("status") != "done":
+        return jsonify({"error": "Not ready"}), 404
+    stem = Path(meta.get("filename") or job_id).stem
+    if kind == "txt":
+        path, mime, name = storage.txt_path(job_id), "text/plain", f"{stem}.txt"
+    else:
+        path = storage.docx_path(job_id)
+        mime = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        name = f"{stem}.docx"
+    if not path.exists():
+        return jsonify({"error": "Not ready"}), 404
+    return send_file(str(path), mimetype=mime, as_attachment=True, download_name=name)
 
 
 @app.route("/download/<job_id>/txt")
 def download_txt(job_id):
-    with JOBS_LOCK:
-        job = JOBS.get(job_id)
-    if job is None or job["status"] != "done":
-        return jsonify({"error": "Not ready"}), 404
-    stem = Path(job["filename"]).stem
-    return send_file(
-        io.BytesIO(job["txt"].encode("utf-8")),
-        mimetype="text/plain",
-        as_attachment=True,
-        download_name=f"{stem}.txt",
-    )
+    return _download(job_id, "txt")
 
 
 @app.route("/download/<job_id>/docx")
 def download_docx(job_id):
-    with JOBS_LOCK:
-        job = JOBS.get(job_id)
-    if job is None or job["status"] != "done":
-        return jsonify({"error": "Not ready"}), 404
-    stem = Path(job["filename"]).stem
-    return send_file(
-        io.BytesIO(job["docx"]),
-        mimetype="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        as_attachment=True,
-        download_name=f"{stem}.docx",
-    )
+    return _download(job_id, "docx")
+
+
+@app.route("/recent")
+def recent():
+    return jsonify(storage.list_done())
+
+
+@app.route("/retranscribe/<job_id>", methods=["POST"])
+def retranscribe(job_id):
+    src = storage.find_source(job_id)
+    old = storage.read_meta(job_id)
+    if src is None or old is None:
+        return jsonify({"error": "Original audio no longer available"}), 404
+
+    data = request.get_json(silent=True) or {}
+    model_choice = data.get("model") or old.get("model") or "precise"
+    language = data.get("language") or None
+    if language and (len(language) > 8 or not language.isalpha()):
+        language = None
+
+    filename = old.get("filename") or "audio"
+    new_id = str(uuid.uuid4())
+    new_src = storage.job_dir(new_id) / f"source{src.suffix}"
+    new_src.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(str(src), str(new_src))
+
+    wav_path = str(UPLOAD_DIR / f"{new_id}.wav")
+    try:
+        convert_to_wav(str(new_src), wav_path)
+    except RuntimeError as exc:
+        storage.delete_job(new_id)
+        return jsonify({"error": str(exc)}), 500
+
+    _start_job(new_id, filename, model_choice, language, wav_path, time.time())
+    return jsonify({"job_id": new_id})
 
 
 if __name__ == "__main__":

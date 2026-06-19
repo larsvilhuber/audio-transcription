@@ -9,6 +9,8 @@ import whisperx
 from docx import Document
 from dotenv import load_dotenv
 
+import storage
+
 load_dotenv()
 
 # Global model cache — one entry per model name, loaded on first use
@@ -109,12 +111,18 @@ def segments_to_docx(segments, filename):
     return buf.read()
 
 
-def run_transcription(job, wav_path, filename, model_name: str = MODEL_PRECISE, language: str | None = None):
-    """Run full WhisperX pipeline and update job dict in-place."""
+def run_transcription(job, wav_path, filename, model_name: str = MODEL_PRECISE, language: str | None = None, job_id: str | None = None):
+    """Run full WhisperX pipeline and update job dict in-place.
+
+    When job_id is given, transcript files and the final meta.json are written
+    to disk before the job is marked done, so downloads and the recent list
+    survive a refresh or the GPU-idle restart."""
     hf_token = os.environ.get("HF_TOKEN")
     if not hf_token:
         job["status"] = "error"
         job["error"] = "HF_TOKEN not set"
+        if job_id is not None:
+            storage.finalize_meta(job_id, "error", error="HF_TOKEN not set")
         return
 
     def cancelled():
@@ -185,19 +193,32 @@ def run_transcription(job, wav_path, filename, model_name: str = MODEL_PRECISE, 
 
         job["progress"] = "Generating output files..."
         segments = result["segments"]
-        job["txt"] = segments_to_text(segments)
-        job["docx"] = segments_to_docx(segments, filename)
-        job["stats"] = {
+        txt = segments_to_text(segments)
+        docx = segments_to_docx(segments, filename)
+        stats = {
             "audio_duration_s": audio_duration_s,
             "transcription_s": transcription_s,
             "diarization_s": diarization_s,
         }
+        # Persist to disk BEFORE marking done, so a download can never race
+        # ahead of the files being written.
+        if job_id is not None:
+            storage.write_outputs(job_id, txt, docx)
+            storage.finalize_meta(job_id, "done", language=language, stats=stats)
+        job["txt"] = txt
+        job["docx"] = docx
+        job["stats"] = stats
         job["status"] = "done"
         job["progress"] = "Complete"
 
     except Exception as exc:
         job["status"] = "error"
         job["error"] = str(exc)
+        if job_id is not None:
+            try:
+                storage.finalize_meta(job_id, "error", error=str(exc))
+            except Exception:
+                pass
     finally:
         # Unload all models and free VRAM
         _unload_models()
@@ -208,8 +229,8 @@ def run_transcription(job, wav_path, filename, model_name: str = MODEL_PRECISE, 
             pass
 
 
-def transcription_proc(job, wav_path, filename, model_name, language):
+def transcription_proc(job, wav_path, filename, model_name, language, job_id):
     """Subprocess entry point — must live in transcriber.py so that spawn
     imports only this module, not app.py (which would recreate the Manager
     and idle-monitor thread inside the worker process)."""
-    run_transcription(job, wav_path, filename, model_name, language=language)
+    run_transcription(job, wav_path, filename, model_name, language=language, job_id=job_id)

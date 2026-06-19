@@ -326,6 +326,11 @@
       Download DOCX
     </a>
   </div>
+
+  <div id="recent-section">
+    <h2>Recent transcriptions</h2>
+    <ul id="recent-list"></ul>
+  </div>
 </div>
 
 <script>
@@ -467,6 +472,7 @@
         } else if (data.status === 'done') {
           stopRunning();
           showDone(jobId, data.language, data.stats);
+          loadRecent();
         } else if (data.status === 'cancelled') {
           stopRunning();
           statusBox.style.display = 'block';
@@ -555,6 +561,146 @@
     }
     await startTranscription(newLang);
   });
+
+  // ---- Recent transcriptions (disk-backed, server is source of truth) ----
+  const recentSection = document.getElementById('recent-section');
+  const recentList    = document.getElementById('recent-list');
+
+  function timeAgo(epoch) {
+    if (!epoch) return '';
+    const s = Math.max(0, Date.now() / 1000 - epoch);
+    if (s < 60)    return 'just now';
+    if (s < 3600)  return Math.floor(s / 60) + ' min ago';
+    if (s < 86400) return Math.floor(s / 3600) + ' h ago';
+    return Math.floor(s / 86400) + ' d ago';
+  }
+
+  function modelLabel(m) { return m === 'fast' ? 'Fast' : 'Precise'; }
+
+  function restoreJob(item) {
+    if (pollInterval) { clearInterval(pollInterval); pollInterval = null; }
+    currentJobId = item.job_id;
+    errorMsg.style.display = 'none';
+    showDone(item.job_id, item.language, item.stats);
+    statusBox.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  }
+
+  async function retranscribeRecent(item, model, btnEl) {
+    btnEl.disabled = true;
+    if (pollInterval) { clearInterval(pollInterval); pollInterval = null; }
+    errorMsg.style.display     = 'none';
+    langOverride.style.display = 'none';
+    downloads.style.display    = 'none';
+    statsBox.style.display     = 'none';
+    currentJobId = null;
+    showSpinner('Queued — waiting for transcription...');
+    statusBox.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    try {
+      const r = await fetch(`retranscribe/${item.job_id}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model }),
+      });
+      const data = await r.json();
+      if (!r.ok || data.error) {
+        showError(data.error || 'Retranscribe failed');
+        return;
+      }
+      currentJobId = data.job_id;
+      stopBtn.style.display = 'inline-block';
+      stopBtn.disabled = false;
+      stopBtn.textContent = '⏹ Stop';
+      startPolling(data.job_id, false);
+    } catch (err) {
+      showError('Retranscribe failed: ' + err.message);
+    } finally {
+      btnEl.disabled = false;
+    }
+  }
+
+  function renderRecent(items) {
+    recentList.innerHTML = '';
+    if (!items.length) { recentSection.style.display = 'none'; return; }
+    recentSection.style.display = 'block';
+
+    items.forEach(item => {
+      const li = document.createElement('li');
+      li.className = 'recent-item';
+
+      const head = document.createElement('div');
+      head.className = 'recent-head';
+
+      const name = document.createElement('button');
+      name.className = 'recent-name';
+      name.textContent = item.filename || '(untitled)';
+      name.title = 'Reopen this transcription';
+      name.addEventListener('click', () => restoreJob(item));
+      head.appendChild(name);
+
+      const meta = document.createElement('span');
+      meta.className = 'recent-meta';
+      meta.textContent = timeAgo(item.created_at);
+      head.appendChild(meta);
+
+      if (item.language) {
+        const lb = document.createElement('span');
+        lb.className = 'recent-badge';
+        lb.textContent = item.language.toUpperCase();
+        head.appendChild(lb);
+      }
+      const mb = document.createElement('span');
+      mb.className = 'recent-badge';
+      mb.textContent = modelLabel(item.model);
+      head.appendChild(mb);
+      li.appendChild(head);
+
+      const actions = document.createElement('div');
+      actions.className = 'recent-actions';
+
+      const txt = document.createElement('a');
+      txt.className = 'btn-txt';
+      txt.href = `download/${item.job_id}/txt`;
+      txt.setAttribute('download', '');
+      txt.textContent = 'TXT';
+      actions.appendChild(txt);
+
+      const docx = document.createElement('a');
+      docx.className = 'btn-docx';
+      docx.href = `download/${item.job_id}/docx`;
+      docx.setAttribute('download', '');
+      docx.textContent = 'DOCX';
+      actions.appendChild(docx);
+
+      const sel = document.createElement('select');
+      ['precise', 'fast'].forEach(v => {
+        const o = document.createElement('option');
+        o.value = v;
+        o.textContent = modelLabel(v);
+        if (v === (item.model || 'precise')) o.selected = true;
+        sel.appendChild(o);
+      });
+      actions.appendChild(sel);
+
+      const rbtn = document.createElement('button');
+      rbtn.className = 'recent-retr';
+      rbtn.innerHTML = '&#8635; Retranscribe';
+      rbtn.addEventListener('click', () => retranscribeRecent(item, sel.value, rbtn));
+      actions.appendChild(rbtn);
+
+      li.appendChild(actions);
+      recentList.appendChild(li);
+    });
+  }
+
+  async function loadRecent() {
+    try {
+      const r = await fetch('recent');
+      if (!r.ok) return;
+      renderRecent(await r.json());
+    } catch (_) { /* ignore */ }
+  }
+
+  loadRecent();
 </script>
 </body>
 </html>
