@@ -1,0 +1,13 @@
+[project]
+name = "audio-transcription"
+version = "0.1.0"
+description = "Flask app for audio transcription using Whisper/WhisperX"
+requires-python = "==3.12.*"
+dependencies = [
+    "torch",
+    "openai-whisper",
+    "whisperx",
+    "python-dotenv",
+    "flask",
+    "python-docx",
+]

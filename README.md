@@ -7,13 +7,13 @@ Two scripts for transcribing audio files using [Whisper](https://github.com/open
 **`transcribe-only.py`** — Simple transcription using OpenAI Whisper (`large` model). No speaker labels.
 
 ```bash
-python transcribe-only.py audio.m4a
+uv run transcribe-only.py audio.m4a
 ```
 
 **`transcribe.py`** — Full pipeline using [WhisperX](https://github.com/m-bain/whisperX): transcription + timestamp alignment + speaker diarization. Requires a Hugging Face token for diarization.
 
 ```bash
-python transcribe.py audio.m4a
+uv run transcribe.py audio.m4a
 ```
 
 Both scripts write output to a `.txt` file alongside the input audio.
@@ -21,7 +21,7 @@ Both scripts write output to a `.txt` file alongside the input audio.
 ## Setup
 
 ```bash
-pip install -r requirements.txt
+uv sync
 ```
 
 For `transcribe.py`, create a `.env` file with your [Hugging Face token](https://huggingface.co/settings/tokens):

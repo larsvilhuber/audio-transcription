@@ -1,6 +1,0 @@
-torch
-openai-whisper
-whisperx
-python-dotenv
-flask
-python-docx

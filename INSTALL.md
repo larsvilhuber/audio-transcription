@@ -2,7 +2,7 @@
 
 ## Prerequisites
 
-- Python 3.10+
+- [`uv`](https://docs.astral.sh/uv/) installed (e.g. `pipx install uv`) — it manages its own Python 3.12 install, independent of the system Python
 - `ffmpeg` installed and on PATH
 - CUDA-capable GPU recommended (falls back to CPU)
 - nginx installed
@@ -31,17 +31,23 @@ chmod 600 /home/transcription/.env
 
 ## 3. Set up the Python virtual environment
 
+`uv` reads `pyproject.toml` / `.python-version` and downloads a matching
+Python 3.12 itself, so this works even if the system Python has moved on to
+a newer version:
+
 ```bash
 cd /home/transcription/app
-python3 -m venv .venv
-.venv/bin/pip install -r requirements.txt
+uv sync
 ```
+
+This creates `.venv` and `uv.lock`. The systemd service below still points
+straight at `.venv/bin/python`, so no further wiring is needed.
 
 ## 4. Test the Flask app directly
 
 ```bash
 cd /home/transcription/app
-APP_BASE_PATH=/audio/ .venv/bin/python app.py
+APP_BASE_PATH=/audio/ uv run app.py
 # Should start on http://0.0.0.0:5000
 ```
 
@@ -150,5 +156,6 @@ sudo journalctl -u audio-transcription -f
 ```bash
 cd /home/transcription/app
 git pull
+uv sync
 sudo systemctl restart audio-transcription
 ```
