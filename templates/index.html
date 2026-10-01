@@ -359,9 +359,9 @@
       <line x1="12" y1="3" x2="12" y2="15"/>
     </svg>
     <p>Drag &amp; drop an audio file here</p>
-    <p style="font-size:0.8rem;margin-top:0.4rem;">or click to select &mdash; mp3, m4a, mp4a, mp4, wav, flac, ogg&hellip;</p>
+    <p style="font-size:0.8rem;margin-top:0.4rem;">or click to select &mdash; mp3, m4a, mp4a, mp4, wav, flac, ogg&hellip; or a .vtt transcript to reformat</p>
   </div>
-  <input id="file-input" type="file" accept=".mp3,.m4a,.mp4a,.mp4,.wav,.ogg,.flac,.webm,.aac">
+  <input id="file-input" type="file" accept=".mp3,.m4a,.mp4a,.mp4,.wav,.ogg,.flac,.webm,.aac,.vtt">
   <div id="file-info"></div>
 
   <div class="model-toggle">
@@ -634,6 +634,14 @@
         return;
       }
       currentJobId = data.job_id;
+      if (data.done) {
+        // VTT upload: already reformatted server-side, nothing to poll.
+        showDone(data.job_id, null, null);
+        loadRecent();
+        btn.disabled = false;
+        retranscribeBtn.disabled = false;
+        return;
+      }
       stopBtn.style.display = 'inline-block';
       retranscribeBtn.disabled = false;
       showSpinner('Queued — waiting for transcription...');
@@ -672,7 +680,7 @@
     return Math.floor(s / 86400) + ' d ago';
   }
 
-  function modelLabel(m) { return m === 'fast' ? 'Fast' : 'Precise'; }
+  function modelLabel(m) { return m === 'vtt' ? 'VTT' : m === 'fast' ? 'Fast' : 'Precise'; }
 
   function restoreJob(item) {
     if (pollInterval) { clearInterval(pollInterval); pollInterval = null; }
@@ -768,6 +776,13 @@
       docx.setAttribute('download', '');
       docx.textContent = 'DOCX';
       actions.appendChild(docx);
+
+      // VTT items were never transcribed, so there is nothing to re-run.
+      if (item.model === 'vtt') {
+        li.appendChild(actions);
+        recentList.appendChild(li);
+        return;
+      }
 
       const spacer = document.createElement('span');
       spacer.className = 'spacer';

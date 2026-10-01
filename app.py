@@ -11,7 +11,11 @@ from pathlib import Path
 from flask import Flask, request, jsonify, render_template, send_file
 
 import storage
-from transcriber import convert_to_wav, transcription_proc, MODEL_FAST, MODEL_PRECISE
+from transcriber import (
+    convert_to_wav, transcription_proc, segments_to_text, segments_to_docx,
+    MODEL_FAST, MODEL_PRECISE,
+)
+from vtt import parse_vtt
 
 UPLOAD_DIR = Path("/tmp/audio-transcription")
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
@@ -19,7 +23,7 @@ UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 with open(Path(__file__).parent / "pyproject.toml", "rb") as _f:
     VERSION = tomllib.load(_f)["project"]["version"]
 
-ALLOWED_EXTENSIONS = {".mp3", ".m4a", ".mp4a", ".mp4", ".wav", ".ogg", ".flac", ".webm", ".aac"}
+ALLOWED_EXTENSIONS = {".mp3", ".m4a", ".mp4a", ".mp4", ".wav", ".ogg", ".flac", ".webm", ".aac", ".vtt"}
 
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 500 * 1024 * 1024  # 500 MB
@@ -156,6 +160,35 @@ def _start_job(job_id, filename, model_choice, language, wav_path, created_at):
     threading.Thread(target=_monitor, daemon=True).start()
 
 
+def _handle_vtt(f):
+    """Reformat an uploaded VTT transcript (no transcription) and register it
+    as an already-finished job so it shows up in downloads and the recent list."""
+    raw = f.read().decode("utf-8", errors="replace")
+    segs = parse_vtt(raw)
+    if not segs:
+        return jsonify({"error": "No cues found in VTT file"}), 400
+
+    job_id = str(uuid.uuid4())
+    storage.job_dir(job_id).mkdir(parents=True, exist_ok=True)
+    (storage.job_dir(job_id) / "source.vtt").write_text(raw, encoding="utf-8")
+
+    storage.write_outputs(job_id, segments_to_text(segs), segments_to_docx(segs, f.filename))
+    meta = {
+        "job_id": job_id,
+        "filename": f.filename,
+        "model": "vtt",
+        "status": "done",
+        "language": None,
+        "created_at": time.time(),
+        "stats": None,
+        "error": None,
+    }
+    storage.write_meta(job_id, meta)
+    with JOBS_LOCK:
+        JOBS[job_id] = {**meta, "progress": "Complete"}
+    return jsonify({"job_id": job_id, "done": True})
+
+
 def _load_jobs_from_disk():
     """Rebuild the in-memory job index from disk on startup. Completed jobs are
     restored as plain dicts; interrupted (non-done) jobs can never resume, so
@@ -192,6 +225,9 @@ def upload():
         return jsonify({"error": "No file selected"}), 400
     if not _allowed(f.filename):
         return jsonify({"error": "Unsupported file type"}), 400
+
+    if Path(f.filename).suffix.lower() == ".vtt":
+        return _handle_vtt(f)
 
     model_choice = request.form.get("model", "precise")
 
@@ -297,6 +333,9 @@ def retranscribe(job_id):
     old = storage.read_meta(job_id)
     if src is None or old is None:
         return jsonify({"error": "Original audio no longer available"}), 404
+
+    if old.get("model") == "vtt":
+        return jsonify({"error": "VTT files are not transcribed"}), 400
 
     data = request.get_json(silent=True) or {}
     model_choice = data.get("model") or old.get("model") or "precise"
