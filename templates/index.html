@@ -340,6 +340,12 @@
     }
     .recent-retr:hover { background: #eef2ff; }
     .recent-retr:disabled { opacity: 0.5; cursor: not-allowed; }
+  .app-version {
+      margin-top: 1.5rem;
+      text-align: center;
+      font-size: 0.75rem;
+      color: #9ca3af;
+    }
   </style>
 </head>
 <body>
@@ -353,9 +359,9 @@
       <line x1="12" y1="3" x2="12" y2="15"/>
     </svg>
     <p>Drag &amp; drop an audio file here</p>
-    <p style="font-size:0.8rem;margin-top:0.4rem;">or click to select &mdash; mp3, m4a, mp4, wav, flac, ogg&hellip;</p>
+    <p style="font-size:0.8rem;margin-top:0.4rem;">or click to select &mdash; mp3, m4a, mp4a, mp4, wav, flac, ogg&hellip;</p>
   </div>
-  <input id="file-input" type="file" accept=".mp3,.m4a,.mp4,.wav,.ogg,.flac,.webm,.aac">
+  <input id="file-input" type="file" accept=".mp3,.m4a,.mp4a,.mp4,.wav,.ogg,.flac,.webm,.aac">
   <div id="file-info"></div>
 
   <div class="model-toggle">
@@ -421,6 +427,7 @@
     <h2>Recent transcriptions</h2>
     <ul id="recent-list"></ul>
   </div>
+  <footer class="app-version">v{{ version }}</footer>
 </div>
 
 <script>

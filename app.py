@@ -5,6 +5,7 @@ import uuid
 import shutil
 import threading
 import multiprocessing
+import tomllib
 from pathlib import Path
 
 from flask import Flask, request, jsonify, render_template, send_file
@@ -15,7 +16,10 @@ from transcriber import convert_to_wav, transcription_proc, MODEL_FAST, MODEL_PR
 UPLOAD_DIR = Path("/tmp/audio-transcription")
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
-ALLOWED_EXTENSIONS = {".mp3", ".m4a", ".mp4", ".wav", ".ogg", ".flac", ".webm", ".aac"}
+with open(Path(__file__).parent / "pyproject.toml", "rb") as _f:
+    VERSION = tomllib.load(_f)["project"]["version"]
+
+ALLOWED_EXTENSIONS = {".mp3", ".m4a", ".mp4a", ".mp4", ".wav", ".ogg", ".flac", ".webm", ".aac"}
 
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 500 * 1024 * 1024  # 500 MB
@@ -170,7 +174,7 @@ def _load_jobs_from_disk():
 
 @app.route("/")
 def index():
-    return render_template("index.html", base_path=BASE_PATH)
+    return render_template("index.html", base_path=BASE_PATH, version=VERSION)
 
 
 @app.errorhandler(413)
